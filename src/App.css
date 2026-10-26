@@ -42,6 +42,25 @@
   cursor: not-allowed;
 }
 
+.registration-status {
+  display: flex;
+}
+
+.registration-status button {
+  flex: 1;
+  border: 1px solid #777;
+  background: #fff;
+}
+
+.registration-status button + button {
+  border-left: 0;
+}
+
+.registration-status button[aria-pressed="true"] {
+  background: #284238;
+  color: #fff;
+}
+
 .search-results {
   width: min(100%, 30rem);
   margin: 2rem auto 0;
@@ -113,4 +132,36 @@
   padding: 0.25rem 0.75rem;
   font: inherit;
   cursor: pointer;
+}
+
+.book-edit-form {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  max-width: 24rem;
+}
+
+.book-edit-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.book-edit-form input,
+.book-edit-form select,
+.book-edit-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem;
+  font: inherit;
+}
+
+.book-edit-form textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.book-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }

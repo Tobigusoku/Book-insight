@@ -9,6 +9,7 @@ describe('App', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
   test('Book Insightという見出しを表示する', () => {
@@ -37,9 +38,11 @@ describe('App', () => {
 
     const bookItem = screen.getByRole('listitem')
     expect(bookItem).toHaveTextContent('銀河鉄道の夜 / 宮沢賢治')
+    expect(within(bookItem).getByText('積読')).toBeInTheDocument()
     expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
       title: '銀河鉄道の夜',
       author: '宮沢賢治',
+      status: 'unread',
     })
     expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).not.toHaveProperty('memo')
     expect(screen.queryByRole('textbox', { name: '感想・メモ' })).not.toBeInTheDocument()
@@ -64,6 +67,104 @@ describe('App', () => {
     fireEvent.change(titleInput, { target: { value: '   ' } })
     expect(addButton).toBeDisabled()
     expect(screen.queryAllByRole('listitem')).toHaveLength(0)
+  })
+
+  test('新規登録で読了を選ぶと評価3と今日の日付で保存する', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2024, 5, 1, 12))
+    const { unmount } = render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    const form = screen.getByRole('form', { name: '新しい本の読了記録' })
+    const addButton = within(form).getByRole('button', { name: '追加' })
+    expect(addButton).toBeDisabled()
+    expect(within(form).getByRole('combobox', { name: '評価' })).toHaveValue('3')
+    expect(within(form).getByLabelText('読了日')).toHaveValue('2024-06-01')
+
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
+      target: { value: '銀河鉄道の夜' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
+      target: { value: '宮沢賢治' },
+    })
+    expect(addButton).toBeEnabled()
+    fireEvent.click(addButton)
+
+    const bookItem = screen.getByRole('listitem')
+    expect(within(bookItem).getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(within(bookItem).getByText('2024-06-01')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      title: '銀河鉄道の夜',
+      author: '宮沢賢治',
+      status: 'read',
+      rating: 3,
+      readDate: { precision: 'day', value: '2024-06-01' },
+      memo: '',
+    })
+    expect(screen.getByRole('button', { name: '積読' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('form', { name: '新しい本の読了記録' })).not.toBeInTheDocument()
+
+    unmount()
+    render(<App />)
+    expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
+  })
+
+  test('読了として新規登録するとき年のみ・評価・メモを選べる', () => {
+    render(<App />)
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
+      target: { value: 'こころ' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
+      target: { value: '夏目漱石' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+
+    const form = screen.getByRole('form', { name: '新しい本の読了記録' })
+    fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
+      target: { value: '5' },
+    })
+    fireEvent.change(within(form).getByRole('combobox', { name: '読了時期' }), {
+      target: { value: 'year' },
+    })
+    fireEvent.change(within(form).getByLabelText('読了年'), {
+      target: { value: '2019' },
+    })
+    fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: ' また読みたい ' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: '追加' }))
+
+    expect(screen.getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(screen.getByText('2019年')).toBeInTheDocument()
+    expect(screen.getByText('また読みたい')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      status: 'read',
+      rating: 5,
+      readDate: { precision: 'year', value: '2019' },
+      memo: 'また読みたい',
+    })
+  })
+
+  test('読了登録をキャンセルすると積読として追加できる', () => {
+    render(<App />)
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
+      target: { value: '雪国' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
+      target: { value: '川端康成' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    const form = screen.getByRole('form', { name: '新しい本の読了記録' })
+    fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: '保存しないメモ' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    const book = JSON.parse(localStorage.getItem('book-insight-books'))[0]
+    expect(book.status).toBe('unread')
+    expect(book).not.toHaveProperty('memo')
+    expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
   })
 
   test('選んだ本だけを削除する', () => {
@@ -107,6 +208,9 @@ describe('App', () => {
     render(<App />)
     expect(screen.getByText('銀河鉄道の夜 / 宮沢賢治')).toBeInTheDocument()
     expect(screen.getByText('こころ / 夏目漱石')).toBeInTheDocument()
+    expect(screen.getAllByRole('listitem').filter((item) => within(item).queryByText('積読'))).toHaveLength(2)
+    expect(JSON.parse(localStorage.getItem('book-insight-books')).map((book) => book.status))
+      .toEqual(['unread', 'unread'])
 
     const restoredTitleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     const restoredAuthorInput = screen.getByRole('textbox', { name: '著者' })
@@ -135,11 +239,321 @@ describe('App', () => {
 
     const bookItem = screen.getByRole('listitem')
     expect(bookItem).toHaveTextContent('銀河鉄道の夜')
+    expect(within(bookItem).getByText('積読')).toBeInTheDocument()
     expect(bookItem).toHaveTextContent('読後の感想')
     expect(bookItem).not.toHaveTextContent('undefined')
   })
 
-  test('本を検索して候補のタイトルを選べる', async () => {
+  test('積読を読了にすると初期評価3と今日の日付を保存し、再表示後も残る', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2024, 5, 1, 12))
+    const { unmount } = render(<App />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
+      target: { value: '銀河鉄道の夜' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
+      target: { value: '宮沢賢治' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    const bookItem = screen.getByRole('listitem')
+    fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
+    const form = within(bookItem).getByRole('form', { name: '銀河鉄道の夜の読了記録' })
+    expect(within(form).getByRole('combobox', { name: '評価' })).toHaveValue('3')
+    expect(within(form).getByLabelText('読了日')).toHaveValue('2024-06-01')
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+
+    expect(within(bookItem).getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(within(bookItem).getByText('2024-06-01')).toBeInTheDocument()
+    expect(within(bookItem).queryByRole('button', { name: '読了にする' })).not.toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      status: 'read',
+      rating: 3,
+      readDate: { precision: 'day', value: '2024-06-01' },
+      memo: '',
+    })
+
+    unmount()
+    render(<App />)
+    expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(screen.getByText('2024-06-01')).toBeInTheDocument()
+  })
+
+  test('読了時期を年のみで記録し、評価と感想も保存できる', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: 'こころ', author: '夏目漱石', status: 'unread' },
+    ]))
+    render(<App />)
+
+    const bookItem = screen.getByRole('listitem')
+    fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
+    const form = within(bookItem).getByRole('form', { name: 'こころの読了記録' })
+    fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
+      target: { value: '5' },
+    })
+    fireEvent.change(within(form).getByRole('combobox', { name: '読了時期' }), {
+      target: { value: 'year' },
+    })
+    fireEvent.change(within(form).getByLabelText('読了年'), {
+      target: { value: '2020' },
+    })
+    fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: ' また読みたい ' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+
+    expect(within(bookItem).getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(within(bookItem).getByText('2020年')).toBeInTheDocument()
+    expect(within(bookItem).getByText('また読みたい')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      status: 'read',
+      rating: 5,
+      readDate: { precision: 'year', value: '2020' },
+      memo: 'また読みたい',
+    })
+  })
+
+  test('読了時期を不明にでき、キャンセル時は積読のままにする', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    render(<App />)
+
+    const bookItem = screen.getByRole('listitem')
+    fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
+    const form = within(bookItem).getByRole('form', { name: '雪国の読了記録' })
+    fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
+    expect(within(bookItem).getByText('積読')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].status).toBe('unread')
+
+    fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
+    const reopenedForm = within(bookItem).getByRole('form', { name: '雪国の読了記録' })
+    fireEvent.change(within(reopenedForm).getByRole('combobox', { name: '読了時期' }), {
+      target: { value: 'unknown' },
+    })
+    expect(within(reopenedForm).queryByLabelText('読了日')).not.toBeInTheDocument()
+    fireEvent.click(within(reopenedForm).getByRole('button', { name: '保存' }))
+
+    expect(within(bookItem).getByText('読了時期不明')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].readDate).toBeNull()
+  })
+
+  test('読了年が空なら保存しない', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
+    const form = screen.getByRole('form', { name: '雪国の読了記録' })
+    fireEvent.change(within(form).getByRole('combobox', { name: '読了時期' }), {
+      target: { value: 'year' },
+    })
+    fireEvent.change(within(form).getByLabelText('読了年'), { target: { value: '' } })
+    fireEvent.submit(form)
+
+    expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].status).toBe('unread')
+  })
+
+  test('選んだ本だけを読了にする', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: 'こころ', author: '夏目漱石', status: 'unread' },
+      { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    render(<App />)
+
+    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    fireEvent.click(within(firstBook).getByRole('button', { name: '読了にする' }))
+    fireEvent.click(within(firstBook).getByRole('button', { name: '保存' }))
+
+    expect(within(firstBook).getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(within(secondBook).getByText('積読')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books')).map((book) => book.status))
+      .toEqual(['read', 'unread'])
+  })
+
+  test('読了済みの評価・読了時期・メモを編集して保存できる', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      {
+        id: 1,
+        title: 'こころ',
+        author: '夏目漱石',
+        status: 'read',
+        rating: 5,
+        readDate: { precision: 'year', value: '2018' },
+        memo: '前の感想',
+      },
+      { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    const { unmount } = render(<App />)
+
+    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    fireEvent.click(within(firstBook).getByRole('button', { name: '読了記録を編集' }))
+    const form = within(firstBook).getByRole('form', { name: 'こころの読了記録を編集' })
+    expect(within(form).getByRole('combobox', { name: '評価' })).toHaveValue('5')
+    expect(within(form).getByRole('combobox', { name: '読了時期' })).toHaveValue('year')
+    expect(within(form).getByLabelText('読了年')).toHaveValue('2018')
+    expect(within(form).getByRole('textbox', { name: '感想・メモ（任意）' })).toHaveValue('前の感想')
+
+    fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
+      target: { value: '2' },
+    })
+    fireEvent.change(within(form).getByRole('combobox', { name: '読了時期' }), {
+      target: { value: 'day' },
+    })
+    fireEvent.change(within(form).getByLabelText('読了日'), {
+      target: { value: '2023-04-05' },
+    })
+    fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: ' 新しい感想 ' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+
+    expect(within(firstBook).getByText('読了 · 2/5')).toBeInTheDocument()
+    expect(within(firstBook).getByText('2023-04-05')).toBeInTheDocument()
+    expect(within(firstBook).getByText('新しい感想')).toBeInTheDocument()
+    expect(within(secondBook).getByText('積読')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      title: 'こころ',
+      author: '夏目漱石',
+      status: 'read',
+      rating: 2,
+      readDate: { precision: 'day', value: '2023-04-05' },
+      memo: '新しい感想',
+    })
+
+    unmount()
+    render(<App />)
+    expect(screen.getByText('読了 · 2/5')).toBeInTheDocument()
+    expect(screen.getByText('新しい感想')).toBeInTheDocument()
+  })
+
+  test('読了済みの編集をキャンセルすると保存済みの値を保つ', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      {
+        id: 1,
+        title: '雪国',
+        author: '川端康成',
+        status: 'read',
+        rating: 3,
+        readDate: null,
+        memo: '元の感想',
+      },
+    ]))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
+    const form = screen.getByRole('form', { name: '雪国の読了記録を編集' })
+    expect(within(form).getByRole('combobox', { name: '読了時期' })).toHaveValue('unknown')
+    fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
+      target: { value: '4' },
+    })
+    fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: '保存しない感想' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
+
+    expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(screen.getByText('元の感想')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].rating).toBe(3)
+    fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
+    expect(screen.getByRole('combobox', { name: '評価' })).toHaveValue('3')
+    expect(screen.getByRole('textbox', { name: '感想・メモ（任意）' })).toHaveValue('元の感想')
+  })
+
+  test('タイトルと著者を編集し、読了記録を保ったまま保存できる', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      {
+        id: 1,
+        title: 'こころ',
+        author: '夏目漱石',
+        status: 'read',
+        rating: 5,
+        readDate: { precision: 'year', value: '2020' },
+        memo: '印象に残った',
+      },
+      { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    const { unmount } = render(<App />)
+
+    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    fireEvent.click(within(firstBook).getByRole('button', { name: 'タイトル・著者を編集' }))
+    const form = within(firstBook).getByRole('form', { name: 'こころのタイトルと著者を編集' })
+    expect(within(form).getByRole('textbox', { name: '本のタイトル' })).toHaveValue('こころ')
+    expect(within(form).getByRole('textbox', { name: '著者' })).toHaveValue('夏目漱石')
+    fireEvent.change(within(form).getByRole('textbox', { name: '本のタイトル' }), {
+      target: { value: ' こころ 改訂版 ' },
+    })
+    fireEvent.change(within(form).getByRole('textbox', { name: '著者' }), {
+      target: { value: ' 夏目 漱石 ' },
+    })
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+
+    expect(within(firstBook).getByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
+    expect(within(firstBook).getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(within(firstBook).getByText('印象に残った')).toBeInTheDocument()
+    expect(within(secondBook).getByText('雪国 / 川端康成')).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      title: 'こころ 改訂版',
+      author: '夏目 漱石',
+      status: 'read',
+      rating: 5,
+      readDate: { precision: 'year', value: '2020' },
+      memo: '印象に残った',
+    })
+
+    unmount()
+    render(<App />)
+    expect(screen.getByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
+  })
+
+  test('空白だけのタイトル・著者は保存できず、キャンセルすると元に戻る', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
+    ]))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'タイトル・著者を編集' }))
+    const form = screen.getByRole('form', { name: '雪国のタイトルと著者を編集' })
+    const titleInput = within(form).getByRole('textbox', { name: '本のタイトル' })
+    const authorInput = within(form).getByRole('textbox', { name: '著者' })
+    const saveButton = within(form).getByRole('button', { name: '保存' })
+    fireEvent.change(titleInput, { target: { value: '   ' } })
+    expect(saveButton).toBeDisabled()
+    fireEvent.change(titleInput, { target: { value: '雪国 新版' } })
+    fireEvent.change(authorInput, { target: { value: '   ' } })
+    expect(saveButton).toBeDisabled()
+    fireEvent.submit(form)
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].title).toBe('雪国')
+    fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
+
+    expect(screen.getByText('雪国 / 川端康成')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'タイトル・著者を編集' }))
+    const reopenedForm = screen.getByRole('form', { name: '雪国のタイトルと著者を編集' })
+    expect(within(reopenedForm).getByRole('textbox', { name: '本のタイトル' })).toHaveValue('雪国')
+    expect(within(reopenedForm).getByRole('textbox', { name: '著者' })).toHaveValue('川端康成')
+  })
+
+  test('タイトル編集を開くと未保存の読了フォームは閉じる', () => {
+    localStorage.setItem('book-insight-books', JSON.stringify([
+      { id: 1, title: 'こころ', author: '夏目漱石', status: 'read', rating: 3, readDate: null, memo: '元のメモ' },
+    ]))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: '未保存のメモ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'タイトル・著者を編集' }))
+
+    expect(screen.queryByRole('form', { name: 'こころの読了記録を編集' })).not.toBeInTheDocument()
+    expect(screen.getByRole('form', { name: 'こころのタイトルと著者を編集' })).toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].memo).toBe('元のメモ')
+  })
+
+  test('本を検索して候補から読了として登録できる', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => `
@@ -171,6 +585,15 @@ describe('App', () => {
     expect(titleInput).toHaveValue('成瀬は天下を取りにいく')
     expect(screen.getByRole('textbox', { name: '著者' })).toHaveValue('宮島未奈')
     expect(screen.queryByRole('button', { name: '成瀬は天下を取りにいくを選択' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '新しい本の読了記録' })).getByRole('button', { name: '追加' }))
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+      title: '成瀬は天下を取りにいく',
+      author: '宮島未奈',
+      status: 'read',
+      rating: 3,
+    })
   })
 
   test('雪国を検索したら無関係な題名を除き、完全一致を先に表示する', async () => {
