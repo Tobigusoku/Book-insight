@@ -45,6 +45,8 @@ describe('App', () => {
       status: 'unread',
     })
     expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).not.toHaveProperty('memo')
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBeNull()
+    expect(within(bookItem).getByText('書影なし')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '感想・メモ' })).not.toBeInTheDocument()
     expect(titleInput).toHaveValue('')
     expect(authorInput).toHaveValue('')
@@ -591,9 +593,71 @@ describe('App', () => {
     expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
       title: '成瀬は天下を取りにいく',
       author: '宮島未奈',
+      coverUrl: 'https://covers.openlibrary.org/b/isbn/9784103549512-S.jpg?default=false',
       status: 'read',
       rating: 3,
     })
+    expect(within(screen.getByRole('listitem')).getByRole('img', { name: '成瀬は天下を取りにいくの書影' }))
+      .toHaveAttribute('src', 'https://covers.openlibrary.org/b/isbn/9784103549512-S.jpg?default=false')
+  })
+
+  test('積読に登録した書影は再表示後も残り、画像取得に失敗したら代替表示にする', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => `
+        <rss xmlns:dc="http://purl.org/dc/elements/1.1/"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <channel><item>
+            <title>雪国</title><guid>book-1</guid>
+            <dc:creator>川端康成</dc:creator>
+            <dc:identifier xsi:type="dcndl:ISBN">978-4-10-100101-2</dc:identifier>
+          </item></channel>
+        </rss>`,
+    }))
+    const { unmount } = render(<App />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.click(screen.getByRole('button', { name: '検索' }))
+    fireEvent.click(await screen.findByRole('button', { name: '雪国を選択' }))
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    const coverUrl = 'https://covers.openlibrary.org/b/isbn/9784101001012-S.jpg?default=false'
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBe(coverUrl)
+    const bookItem = screen.getByRole('listitem')
+    expect(within(bookItem).getByRole('img', { name: '雪国の書影' })).toHaveAttribute('src', coverUrl)
+
+    unmount()
+    render(<App />)
+    const restoredImage = within(screen.getByRole('listitem')).getByRole('img', { name: '雪国の書影' })
+    expect(restoredImage).toHaveAttribute('src', coverUrl)
+    fireEvent.error(restoredImage)
+    expect(within(screen.getByRole('listitem')).getByText('書影なし')).toBeInTheDocument()
+  })
+
+  test('候補を選んだ後にタイトルを手入力で変えると元の書影を保存しない', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => `
+        <rss xmlns:dc="http://purl.org/dc/elements/1.1/"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <channel><item>
+            <title>雪国</title><guid>book-1</guid>
+            <dc:creator>川端康成</dc:creator>
+            <dc:identifier xsi:type="dcndl:ISBN">978-4-10-100101-2</dc:identifier>
+          </item></channel>
+        </rss>`,
+    }))
+    render(<App />)
+
+    const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
+    fireEvent.change(titleInput, { target: { value: '雪国' } })
+    fireEvent.click(screen.getByRole('button', { name: '検索' }))
+    fireEvent.click(await screen.findByRole('button', { name: '雪国を選択' }))
+    fireEvent.change(titleInput, { target: { value: '別の本' } })
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBeNull()
+    expect(within(screen.getByRole('listitem')).getByText('書影なし')).toBeInTheDocument()
   })
 
   test('雪国を検索したら無関係な題名を除き、完全一致を先に表示する', async () => {

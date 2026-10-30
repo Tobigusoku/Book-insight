@@ -9,7 +9,7 @@ function BookCover({ book }) {
   const [failed, setFailed] = useState(false)
 
   if (!book.coverUrl || failed) {
-    return <div className="cover-placeholder" aria-hidden="true" />
+    return <div className="cover-placeholder">書影なし</div>
   }
 
   return (
@@ -126,6 +126,7 @@ function ReadBookForm({ book, onSave, onCancel, isNew = false, canSave = true })
 function App() {
   const [title, setTitle] = useState('')
   const [author, setAuthor] = useState('')
+  const [selectedCoverUrl, setSelectedCoverUrl] = useState(null)
   const [registrationStatus, setRegistrationStatus] = useState('unread')
   const [searchResults, setSearchResults] = useState([])
   const [searchStatus, setSearchStatus] = useState('idle')
@@ -149,6 +150,7 @@ function App() {
 
   const updateTitle = (event) => {
     setTitle(event.target.value)
+    setSelectedCoverUrl(null)
     latestSearch.current += 1
     setSearchResults([])
     setSearchStatus('idle')
@@ -207,6 +209,7 @@ function App() {
   const selectBook = (book) => {
     setTitle(book.title)
     setAuthor(book.author || '')
+    setSelectedCoverUrl(book.coverUrl)
     setSearchResults([])
     setSearchStatus('idle')
   }
@@ -222,6 +225,7 @@ function App() {
       id: nextBookId.current,
       title: bookTitle,
       author: bookAuthor,
+      coverUrl: selectedCoverUrl,
       ...(readDetails || {}),
       status: readDetails ? 'read' : 'unread',
     }
@@ -229,6 +233,7 @@ function App() {
     setBooks([...books, newBook])
     setTitle('')
     setAuthor('')
+    setSelectedCoverUrl(null)
     setRegistrationStatus('unread')
     latestSearch.current += 1
     setSearchResults([])
@@ -330,19 +335,24 @@ function App() {
         <ul>
           {books.map((book) => (
             <li key={book.id}>
-              {editingInfoBookId === book.id ? (
-                <BookInfoForm book={book} onSave={updateBookInfo} onCancel={() => setEditingInfoBookId(null)} />
-              ) : (
-                <>
-                  <h3>{book.author ? `${book.title} / ${book.author}` : book.title}</h3>
-                  <button type="button" onClick={() => {
-                    setReadingBookId(null)
-                    setEditingInfoBookId(book.id)
-                  }}>
-                    タイトル・著者を編集
-                  </button>
-                </>
-              )}
+              <div className="book-list-header">
+                <BookCover book={book} />
+                <div className="book-list-heading">
+                  {editingInfoBookId === book.id ? (
+                    <BookInfoForm book={book} onSave={updateBookInfo} onCancel={() => setEditingInfoBookId(null)} />
+                  ) : (
+                    <>
+                      <h3>{book.author ? `${book.title} / ${book.author}` : book.title}</h3>
+                      <button type="button" onClick={() => {
+                        setReadingBookId(null)
+                        setEditingInfoBookId(book.id)
+                      }}>
+                        タイトル・著者を編集
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
               {book.status === 'read' ? (
                 <>
                   <p>読了 · {book.rating}/5</p>
