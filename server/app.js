@@ -7,6 +7,10 @@ export function createApp() {
 
   app.use(express.json({ strict: false }))
 
+  app.get('/api/books', (_req, res) => {
+    return res.json(books)
+  })
+
   app.post('/api/books', (req, res) => {
     const { title, author } = req.body ?? {}
 

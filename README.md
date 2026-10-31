@@ -11,7 +11,7 @@
 - 本を積読または読了として登録し、一覧表示、タイトル・著者の編集、削除ができます。
 - 読了した本に1〜5の評価、読了時期（年月日・年のみ・不明）、任意のメモを記録・編集できます。
 - 画面の記録は `localStorage` に保存し、同じブラウザで再読み込みしても残ります。
-- 独立したExpress APIで `POST /api/books` を受け付け、タイトル・著者を検証して積読の本をサーバーのメモリに一時保存します。
+- 独立したExpress APIで `POST /api/books` による積読の登録と、`GET /api/books` による登録済み一覧の取得ができます。データはサーバーのメモリに一時保存します。
 
 ## 技術構成
 
@@ -30,7 +30,7 @@
        │                         └─ ISBNからOpen Libraryの書影URLを生成
        └──記録の保存──> localStorage
 
-Express API（POST /api/books） ──保存──> サーバーのメモリ
+Express API（POST /api/books・GET /api/books） <──> サーバーのメモリ
 ```
 
 画面からExpress APIへの通信、PostgreSQLによる永続化、分析・推薦、他メディアへの拡張は未実装です。サーバーの記録は再起動すると消えます。
@@ -52,7 +52,7 @@ APIを試す場合は別のターミナルで起動します。
 npm run dev:server
 ```
 
-APIは通常 `http://localhost:3001` で待ち受けます。現在のエンドポイントは `POST /api/books` のみで、`Content-Type: application/json` の本文に `title` と `author` を指定します。成功時は `201` と作成した積読の本を返し、入力不正や壊れたJSONには `400` を返します。画面からこのAPIは呼び出していません。
+APIは通常 `http://localhost:3001` で待ち受けます。`POST /api/books` は `Content-Type: application/json` の本文に `title` と `author` を指定し、成功時は `201` と作成した積読の本、入力不正や壊れたJSONには `400` を返します。`GET /api/books` は登録順の一覧を `200` で返し、未登録なら空の配列を返します。画面からこのAPIはまだ呼び出していません。
 
 ## テストと確認
 

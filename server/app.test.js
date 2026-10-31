@@ -44,6 +44,27 @@ test('本を登録すると201と積読の記録を返す', async () => {
   expect((await secondResponse.json()).id).toBe(2)
 })
 
+test('本が未登録ならGETで空の一覧を返す', async () => {
+  const response = await fetch(`${baseUrl}/api/books`)
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toContain('application/json')
+  expect(await response.json()).toEqual([])
+})
+
+test('POSTで登録した本をGETで登録順に取得できる', async () => {
+  await postBook({ title: '雪国', author: '川端康成' })
+  await postBook({ title: 'こころ', author: '夏目漱石' })
+
+  const response = await fetch(`${baseUrl}/api/books`)
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual([
+    { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
+    { id: 2, title: 'こころ', author: '夏目漱石', status: 'unread' },
+  ])
+})
+
 test.each([
   { title: '', author: '川端康成' },
   { title: '雪国', author: '   ' },
