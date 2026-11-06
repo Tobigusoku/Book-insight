@@ -11,7 +11,7 @@
 - 本を積読または読了として登録し、一覧表示、タイトル・著者の編集、削除ができます。
 - 読了した本に1〜5の評価、読了時期（年月日・年のみ・不明）、任意のメモを記録・編集できます。
 - 画面の記録は `localStorage` に保存し、同じブラウザで再読み込みしても残ります。
-- 独立したExpress APIで `POST /api/books` による積読の登録と、`GET /api/books` による登録済み一覧の取得ができます。データはサーバーのメモリに一時保存します。
+- 独立したExpress APIで `POST /api/books` による登録、`GET /api/books` による一覧取得、`PATCH /api/books/:id` による更新、`DELETE /api/books/:id` による削除ができます。データはサーバーのメモリに一時保存します。
 
 ## 技術構成
 
@@ -30,7 +30,7 @@
        │                         └─ ISBNからOpen Libraryの書影URLを生成
        └──記録の保存──> localStorage
 
-Express API（POST /api/books・GET /api/books） <──> サーバーのメモリ
+Express API（POST・GET・PATCH・DELETE /api/books） <──> サーバーのメモリ
 ```
 
 画面からExpress APIへの通信、PostgreSQLによる永続化、分析・推薦、他メディアへの拡張は未実装です。サーバーの記録は再起動すると消えます。
@@ -52,7 +52,23 @@ APIを試す場合は別のターミナルで起動します。
 npm run dev:server
 ```
 
-APIは通常 `http://localhost:3001` で待ち受けます。`POST /api/books` は `Content-Type: application/json` の本文に `title` と `author` を指定し、成功時は `201` と作成した積読の本、入力不正や壊れたJSONには `400` を返します。`GET /api/books` は登録順の一覧を `200` で返し、未登録なら空の配列を返します。画面からこのAPIはまだ呼び出していません。
+APIは通常 `http://localhost:3001` で待ち受けます。`POST /api/books` はJSONの `title` と `author` が必須で、`status` は省略すると積読です。任意の `coverUrl` はHTTP(S)のURLまたは `null` を受け付けます。読了の場合は `rating`（1〜5、省略時3）、`readDate`（年月日・年のみ・`null`）、`memo`（省略時は空文字列）も指定できます。成功時は `201` と作成した本、入力不正や壊れたJSONには `400` を返します。`GET /api/books` は登録順の一覧を `200` で返し、未登録なら空の配列を返します。画面からこのAPIはまだ呼び出していません。
+
+`PATCH /api/books/:id` は変更したい項目だけをJSONで指定します。タイトル・著者・書影URLの修正、積読から読了への変更、評価・読了時期・メモの修正に対応します。成功時は更新後の本を `200` で返し、不正な値は `400`、対象がなければ `404` です。読了から積読へは戻せません。`DELETE /api/books/:id` は指定した本を削除し、成功時は本文なしの `204`、IDが不正なら `400`、対象がなければ `404` を返します。
+
+読了として登録するJSONの例です。年のみは `{ "precision": "year", "value": "2020" }`、年月日は `precision` を `day`、`value` を `YYYY-MM-DD` にします。不明なら `readDate` は `null` です。積読には読了用の項目を指定しません。
+
+```json
+{
+  "title": "雪国",
+  "author": "川端康成",
+  "status": "read",
+  "rating": 5,
+  "readDate": { "precision": "year", "value": "2020" },
+  "memo": "また読みたい",
+  "coverUrl": null
+}
+```
 
 ## テストと確認
 
