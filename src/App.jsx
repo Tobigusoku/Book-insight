@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { createBook, getBooks, removeBook, updateBook } from './bookApi'
 import './App.css'
 
-const storageKey = 'book-insight-books'
 const dcNamespace = 'http://purl.org/dc/elements/1.1/'
 const xsiNamespace = 'http://www.w3.org/2001/XMLSchema-instance'
 
@@ -9,7 +9,7 @@ function BookCover({ book }) {
   const [failed, setFailed] = useState(false)
 
   if (!book.coverUrl || failed) {
-    return <div className="cover-placeholder">書影なし</div>
+    return <span className="cover-placeholder">書影なし</span>
   }
 
   return (
@@ -21,7 +21,7 @@ function BookCover({ book }) {
   )
 }
 
-function BookInfoForm({ book, onSave, onCancel }) {
+function BookInfoForm({ book, onSave, onCancel, canSave = true }) {
   const [title, setTitle] = useState(book.title)
   const [author, setAuthor] = useState(book.author || '')
 
@@ -45,8 +45,8 @@ function BookInfoForm({ book, onSave, onCancel }) {
         <input type="text" value={author} onChange={(event) => setAuthor(event.target.value)} required />
       </label>
       <div className="book-edit-actions">
-        <button type="submit" disabled={!title.trim() || !author.trim()}>保存</button>
-        <button type="button" onClick={onCancel}>キャンセル</button>
+        <button type="submit" disabled={!canSave || !title.trim() || !author.trim()}>保存</button>
+        <button type="button" onClick={onCancel} disabled={!canSave}>キャンセル</button>
       </div>
     </form>
   )
@@ -117,7 +117,7 @@ function ReadBookForm({ book, onSave, onCancel, isNew = false, canSave = true })
       </label>
       <div className="book-edit-actions">
         <button type="submit" disabled={!canSave}>{isNew ? '追加' : '保存'}</button>
-        <button type="button" onClick={onCancel}>キャンセル</button>
+        <button type="button" onClick={onCancel} disabled={!canSave}>キャンセル</button>
       </div>
     </form>
   )
@@ -130,23 +130,29 @@ function App() {
   const [registrationStatus, setRegistrationStatus] = useState('unread')
   const [searchResults, setSearchResults] = useState([])
   const [searchStatus, setSearchStatus] = useState('idle')
+  const [expandedBookId, setExpandedBookId] = useState(null)
   const [readingBookId, setReadingBookId] = useState(null)
   const [editingInfoBookId, setEditingInfoBookId] = useState(null)
-  const [books, setBooks] = useState(() => {
-    try {
-      const savedBooks = localStorage.getItem(storageKey)
-      const parsedBooks = savedBooks ? JSON.parse(savedBooks) : []
-      return Array.isArray(parsedBooks) ? parsedBooks : []
-    } catch {
-      return []
-    }
-  })
-  const nextBookId = useRef(books.length === 0 ? 0 : books[books.length - 1].id)
+  const [books, setBooks] = useState([])
+  const [bookStatus, setBookStatus] = useState('loading')
+  const [bookError, setBookError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [reloadBooks, setReloadBooks] = useState(0)
   const latestSearch = useRef(0)
 
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(books))
-  }, [books])
+    let active = true
+    getBooks()
+      .then((result) => {
+        if (!active) return
+        setBooks(result)
+        setBookStatus('ready')
+      })
+      .catch(() => {
+        if (active) setBookStatus('error')
+      })
+    return () => { active = false }
+  }, [reloadBooks])
 
   const updateTitle = (event) => {
     setTitle(event.target.value)
@@ -214,15 +220,19 @@ function App() {
     setSearchStatus('idle')
   }
 
-  const addBook = (readDetails) => {
+  const toggleBookDetails = (id) => {
+    setExpandedBookId((current) => current === id ? null : id)
+    setReadingBookId(null)
+    setEditingInfoBookId(null)
+  }
+
+  const addBook = async (readDetails) => {
     const bookTitle = title.trim()
     const bookAuthor = author.trim()
 
-    if (!bookTitle || !bookAuthor) return
+    if (!bookTitle || !bookAuthor || saving || bookStatus !== 'ready') return
 
-    nextBookId.current += 1
-    const newBook = {
-      id: nextBookId.current,
+    const input = {
       title: bookTitle,
       author: bookAuthor,
       coverUrl: selectedCoverUrl,
@@ -230,30 +240,71 @@ function App() {
       status: readDetails ? 'read' : 'unread',
     }
 
-    setBooks([...books, newBook])
-    setTitle('')
-    setAuthor('')
-    setSelectedCoverUrl(null)
-    setRegistrationStatus('unread')
-    latestSearch.current += 1
-    setSearchResults([])
-    setSearchStatus('idle')
+    setSaving(true)
+    setBookError('')
+    try {
+      const newBook = await createBook(input)
+      setBooks((current) => [...current, newBook])
+      setExpandedBookId(newBook.id)
+      setTitle('')
+      setAuthor('')
+      setSelectedCoverUrl(null)
+      setRegistrationStatus('unread')
+      latestSearch.current += 1
+      setSearchResults([])
+      setSearchStatus('idle')
+    } catch {
+      setBookError('登録できませんでした。もう一度お試しください')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const deleteBook = (id) => {
-    setBooks(books.filter((book) => book.id !== id))
+  const deleteBook = async (id) => {
+    if (saving || bookStatus !== 'ready') return
+    setSaving(true)
+    setBookError('')
+    try {
+      await removeBook(id)
+      setBooks((current) => current.filter((book) => book.id !== id))
+      setExpandedBookId((current) => current === id ? null : current)
+      setReadingBookId((current) => current === id ? null : current)
+      setEditingInfoBookId((current) => current === id ? null : current)
+    } catch {
+      setBookError('削除できませんでした。もう一度お試しください')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const completeBook = (id, details) => {
-    setBooks(books.map((book) => book.id === id
-      ? { ...book, ...details, status: 'read' }
-      : book))
-    setReadingBookId(null)
+  const completeBook = async (id, details) => {
+    if (saving || bookStatus !== 'ready') return
+    setSaving(true)
+    setBookError('')
+    try {
+      const updated = await updateBook(id, { ...details, status: 'read' })
+      setBooks((current) => current.map((book) => book.id === id ? updated : book))
+      setReadingBookId(null)
+    } catch {
+      setBookError('読了記録を保存できませんでした。もう一度お試しください')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const updateBookInfo = (id, info) => {
-    setBooks(books.map((book) => book.id === id ? { ...book, ...info } : book))
-    setEditingInfoBookId(null)
+  const updateBookInfo = async (id, info) => {
+    if (saving || bookStatus !== 'ready') return
+    setSaving(true)
+    setBookError('')
+    try {
+      const updated = await updateBook(id, info)
+      setBooks((current) => current.map((book) => book.id === id ? updated : book))
+      setEditingInfoBookId(null)
+    } catch {
+      setBookError('本の情報を保存できませんでした。もう一度お試しください')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -289,7 +340,7 @@ function App() {
             検索
           </button>
           {registrationStatus === 'unread' && (
-            <button type="button" onClick={() => addBook()} disabled={!title.trim() || !author.trim()}>
+            <button type="button" onClick={() => addBook()} disabled={!title.trim() || !author.trim() || saving || bookStatus !== 'ready'}>
               追加
             </button>
           )}
@@ -300,7 +351,7 @@ function App() {
             onSave={(_id, details) => addBook(details)}
             onCancel={() => setRegistrationStatus('unread')}
             isNew
-            canSave={Boolean(title.trim() && author.trim())}
+            canSave={Boolean(title.trim() && author.trim() && !saving && bookStatus === 'ready')}
           />
         )}
       </div>
@@ -332,49 +383,66 @@ function App() {
 
       <section className="book-list">
         <h2>登録した本</h2>
+        {bookStatus === 'loading' && <p role="status">記録を読み込み中...</p>}
+        {bookStatus === 'error' && (
+          <div>
+            <p role="alert">記録を読み込めませんでした。APIサーバーを確認してください</p>
+            <button type="button" onClick={() => {
+              setBookStatus('loading')
+              setReloadBooks((count) => count + 1)
+            }}>再読み込み</button>
+          </div>
+        )}
+        {bookError && <p role="alert">{bookError}</p>}
         <ul>
           {books.map((book) => (
             <li key={book.id}>
-              <div className="book-list-header">
+              <button
+                type="button"
+                className="book-summary"
+                aria-expanded={expandedBookId === book.id}
+                aria-label={`${book.title}の詳細を${expandedBookId === book.id ? '閉じる' : '開く'}`}
+                onClick={() => toggleBookDetails(book.id)}
+                disabled={saving}
+              >
                 <BookCover book={book} />
-                <div className="book-list-heading">
-                  {editingInfoBookId === book.id ? (
-                    <BookInfoForm book={book} onSave={updateBookInfo} onCancel={() => setEditingInfoBookId(null)} />
-                  ) : (
+                <span className="book-summary-title">{book.author ? `${book.title} / ${book.author}` : book.title}</span>
+                <span className="book-summary-icon" aria-hidden="true">{expandedBookId === book.id ? '−' : '+'}</span>
+              </button>
+              {expandedBookId === book.id && (
+                <div className="book-details">
+                  {book.status === 'read' ? (
                     <>
-                      <h3>{book.author ? `${book.title} / ${book.author}` : book.title}</h3>
-                      <button type="button" onClick={() => {
+                      <p>読了 · {book.rating}/5</p>
+                      <p>{book.readDate ? (book.readDate.precision === 'year' ? `${book.readDate.value}年` : book.readDate.value) : '読了時期不明'}</p>
+                    </>
+                  ) : (
+                    <p>積読</p>
+                  )}
+                  {book.memo && readingBookId !== book.id && <p className="book-memo">{book.memo}</p>}
+                  {editingInfoBookId === book.id && (
+                    <BookInfoForm book={book} onSave={updateBookInfo} onCancel={() => setEditingInfoBookId(null)} canSave={!saving} />
+                  )}
+                  {readingBookId === book.id && (
+                    <ReadBookForm book={book} onSave={completeBook} onCancel={() => setReadingBookId(null)} canSave={!saving} />
+                  )}
+                  <div className="book-detail-actions">
+                    {editingInfoBookId !== book.id && (
+                      <button type="button" disabled={saving} onClick={() => {
                         setReadingBookId(null)
                         setEditingInfoBookId(book.id)
-                      }}>
-                        タイトル・著者を編集
-                      </button>
-                    </>
-                  )}
+                      }}>タイトル・著者を編集</button>
+                    )}
+                    {readingBookId !== book.id && (
+                      <button type="button" disabled={saving} onClick={() => {
+                        setEditingInfoBookId(null)
+                        setReadingBookId(book.id)
+                      }}>{book.status === 'read' ? '読了記録を編集' : '読了にする'}</button>
+                    )}
+                    <button type="button" onClick={() => deleteBook(book.id)} disabled={saving}>削除</button>
+                  </div>
                 </div>
-              </div>
-              {book.status === 'read' ? (
-                <>
-                  <p>読了 · {book.rating}/5</p>
-                  <p>{book.readDate ? (book.readDate.precision === 'year' ? `${book.readDate.value}年` : book.readDate.value) : '読了時期不明'}</p>
-                </>
-              ) : (
-                <p>積読</p>
               )}
-              {book.memo && readingBookId !== book.id && <p>{book.memo}</p>}
-              {readingBookId === book.id ? (
-                <ReadBookForm book={book} onSave={completeBook} onCancel={() => setReadingBookId(null)} />
-              ) : (
-                <button type="button" onClick={() => {
-                  setEditingInfoBookId(null)
-                  setReadingBookId(book.id)
-                }}>
-                  {book.status === 'read' ? '読了記録を編集' : '読了にする'}
-                </button>
-              )}
-              <button type="button" onClick={() => deleteBook(book.id)}>
-                削除
-              </button>
             </li>
           ))}
         </ul>

@@ -125,11 +125,8 @@
 }
 
 .book-list ul {
-  padding-left: 1.5rem;
-}
-
-.book-list h3 {
-  margin-bottom: 0.25rem;
+  list-style: none;
+  padding: 0;
 }
 
 .book-list p {
@@ -137,29 +134,70 @@
 }
 
 .book-list li {
-  margin-bottom: 1rem;
+  border-bottom: 1px solid #ddd;
 }
 
-.book-list-header {
+.book-summary {
   display: grid;
-  grid-template-columns: 3.5rem minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: 3.5rem minmax(0, 1fr) 1.5rem;
+  align-items: center;
   gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.book-list-heading {
-  min-width: 0;
+.book-summary:hover,
+.book-summary:focus-visible {
+  background: #f3f6f4;
 }
 
-.book-list-heading h3 {
-  margin-top: 0;
+.book-summary-title {
+  font-size: 1rem;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.book-summary-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.book-details {
+  padding: 0 0 1rem 4.25rem;
+}
+
+.book-memo {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.book-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .book-list button {
   padding: 0.25rem 0.75rem;
   font: inherit;
   cursor: pointer;
+}
+
+.book-list .book-summary {
+  padding: 0.75rem 0;
+}
+
+@media (max-width: 480px) {
+  .book-details {
+    padding-left: 0;
+  }
 }
 
 .book-edit-form {

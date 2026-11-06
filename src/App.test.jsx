@@ -1,10 +1,67 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from './App'
 
 describe('App', () => {
+  let apiBooks
+  let nextId
+  let searchFetch
+  let failingMethod
+
+  const seedBooks = (books) => {
+    apiBooks = structuredClone(books)
+    nextId = Math.max(0, ...books.map((book) => book.id)) + 1
+  }
+
+  const apiResponse = (data, status = 200) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => structuredClone(data),
+  })
+
+  const renderApp = async () => {
+    const view = render(<App />)
+    await waitFor(() => expect(screen.queryByText('記録を読み込み中...')).not.toBeInTheDocument())
+    return view
+  }
+
+  const openBook = (title) => {
+    fireEvent.click(screen.getByRole('button', { name: `${title}の詳細を開く` }))
+  }
+
   beforeEach(() => {
     localStorage.removeItem('book-insight-books')
+    apiBooks = []
+    nextId = 1
+    failingMethod = null
+    searchFetch = vi.fn()
+    vi.stubGlobal('fetch', vi.fn(async (input, options = {}) => {
+      if (!String(input).startsWith('/api/books')) return searchFetch(input, options)
+      const method = options.method || 'GET'
+      if (failingMethod === method) {
+        failingMethod = null
+        return apiResponse({ error: 'Temporary failure' }, 503)
+      }
+      if (method === 'GET') return apiResponse(apiBooks)
+      if (method === 'POST') {
+        const inputBook = JSON.parse(options.body)
+        const book = { id: nextId++, coverUrl: null, ...inputBook }
+        apiBooks.push(book)
+        return apiResponse(book, 201)
+      }
+      const id = Number(String(input).split('/').at(-1))
+      const index = apiBooks.findIndex((book) => book.id === id)
+      if (index === -1) return apiResponse({ error: 'Book not found' }, 404)
+      if (method === 'PATCH') {
+        apiBooks[index] = { ...apiBooks[index], ...JSON.parse(options.body) }
+        return apiResponse(apiBooks[index])
+      }
+      if (method === 'DELETE') {
+        apiBooks.splice(index, 1)
+        return { ok: true, status: 204 }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    }))
   })
 
   afterEach(() => {
@@ -12,14 +69,14 @@ describe('App', () => {
     vi.useRealTimers()
   })
 
-  test('Book Insightという見出しを表示する', () => {
-    render(<App />)
+  test('Book Insightという見出しを表示する', async () => {
+    await renderApp()
 
     expect(screen.getByRole('heading', { name: 'Book Insight' })).toBeInTheDocument()
   })
 
-  test('入力した本のタイトルを保持する', () => {
-    render(<App />)
+  test('入力した本のタイトルを保持する', async () => {
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     fireEvent.change(titleInput, { target: { value: '銀河鉄道の夜' } })
@@ -27,8 +84,8 @@ describe('App', () => {
     expect(titleInput).toHaveValue('銀河鉄道の夜')
   })
 
-  test('タイトルと著者を登録し、入力欄を空にする', () => {
-    render(<App />)
+  test('タイトルと著者を登録し、入力欄を空にする', async () => {
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     const authorInput = screen.getByRole('textbox', { name: '著者' })
@@ -36,24 +93,24 @@ describe('App', () => {
     fireEvent.change(authorInput, { target: { value: ' 宮沢賢治 ' } })
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
-    const bookItem = screen.getByRole('listitem')
+    const bookItem = await screen.findByRole('listitem')
     expect(bookItem).toHaveTextContent('銀河鉄道の夜 / 宮沢賢治')
     expect(within(bookItem).getByText('積読')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       title: '銀河鉄道の夜',
       author: '宮沢賢治',
       status: 'unread',
     })
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).not.toHaveProperty('memo')
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBeNull()
+    expect(apiBooks[0]).not.toHaveProperty('memo')
+    expect(apiBooks[0].coverUrl).toBeNull()
     expect(within(bookItem).getByText('書影なし')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '感想・メモ' })).not.toBeInTheDocument()
     expect(titleInput).toHaveValue('')
     expect(authorInput).toHaveValue('')
   })
 
-  test('タイトルと著者の両方がないと追加できない', () => {
-    render(<App />)
+  test('タイトルと著者の両方がないと追加できない', async () => {
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     const authorInput = screen.getByRole('textbox', { name: '著者' })
@@ -71,10 +128,10 @@ describe('App', () => {
     expect(screen.queryAllByRole('listitem')).toHaveLength(0)
   })
 
-  test('新規登録で読了を選ぶと評価3と今日の日付で保存する', () => {
-    vi.useFakeTimers()
+  test('新規登録で読了を選ぶと評価3と今日の日付で保存する', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2024, 5, 1, 12))
-    const { unmount } = render(<App />)
+    const { unmount } = await renderApp()
 
     fireEvent.click(screen.getByRole('button', { name: '読了' }))
     const form = screen.getByRole('form', { name: '新しい本の読了記録' })
@@ -92,10 +149,10 @@ describe('App', () => {
     expect(addButton).toBeEnabled()
     fireEvent.click(addButton)
 
-    const bookItem = screen.getByRole('listitem')
+    const bookItem = await screen.findByRole('listitem')
     expect(within(bookItem).getByText('読了 · 3/5')).toBeInTheDocument()
     expect(within(bookItem).getByText('2024-06-01')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       title: '銀河鉄道の夜',
       author: '宮沢賢治',
       status: 'read',
@@ -107,12 +164,13 @@ describe('App', () => {
     expect(screen.queryByRole('form', { name: '新しい本の読了記録' })).not.toBeInTheDocument()
 
     unmount()
-    render(<App />)
+    await renderApp()
+    openBook('銀河鉄道の夜')
     expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
   })
 
-  test('読了として新規登録するとき年のみ・評価・メモを選べる', () => {
-    render(<App />)
+  test('読了として新規登録するとき年のみ・評価・メモを選べる', async () => {
+    await renderApp()
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: 'こころ' },
     })
@@ -136,10 +194,10 @@ describe('App', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: '追加' }))
 
-    expect(screen.getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(await screen.findByText('読了 · 5/5')).toBeInTheDocument()
     expect(screen.getByText('2019年')).toBeInTheDocument()
     expect(screen.getByText('また読みたい')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       status: 'read',
       rating: 5,
       readDate: { precision: 'year', value: '2019' },
@@ -147,8 +205,8 @@ describe('App', () => {
     })
   })
 
-  test('読了登録をキャンセルすると積読として追加できる', () => {
-    render(<App />)
+  test('読了登録をキャンセルすると積読として追加できる', async () => {
+    await renderApp()
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: '雪国' },
     })
@@ -163,14 +221,15 @@ describe('App', () => {
     fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
-    const book = JSON.parse(localStorage.getItem('book-insight-books'))[0]
+    await screen.findByRole('listitem')
+    const book = apiBooks[0]
     expect(book.status).toBe('unread')
     expect(book).not.toHaveProperty('memo')
     expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
   })
 
-  test('選んだ本だけを削除する', () => {
-    render(<App />)
+  test('選んだ本だけを削除する', async () => {
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     const authorInput = screen.getByRole('textbox', { name: '著者' })
@@ -179,20 +238,23 @@ describe('App', () => {
     fireEvent.change(titleInput, { target: { value: '銀河鉄道の夜' } })
     fireEvent.change(authorInput, { target: { value: '宮沢賢治' } })
     fireEvent.click(addButton)
+    await screen.findByText('銀河鉄道の夜 / 宮沢賢治')
     fireEvent.change(titleInput, { target: { value: 'こころ' } })
     fireEvent.change(authorInput, { target: { value: '夏目漱石' } })
     fireEvent.click(addButton)
+    await screen.findByText('こころ / 夏目漱石')
 
     const firstBook = screen.getAllByRole('listitem')[0]
+    openBook('銀河鉄道の夜')
     fireEvent.click(within(firstBook).getByRole('button', { name: '削除' }))
 
-    expect(screen.queryByText('銀河鉄道の夜 / 宮沢賢治')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('銀河鉄道の夜 / 宮沢賢治')).not.toBeInTheDocument())
     expect(screen.getByText('こころ / 夏目漱石')).toBeInTheDocument()
     expect(screen.getAllByRole('listitem')).toHaveLength(1)
   })
 
-  test('追加と削除した本を保存し、再表示後も復元する', () => {
-    const { unmount } = render(<App />)
+  test('追加と削除した本をAPIに保存し、再表示後も復元する', async () => {
+    const { unmount } = await renderApp()
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     const authorInput = screen.getByRole('textbox', { name: '著者' })
     const addButton = screen.getByRole('button', { name: '追加' })
@@ -200,18 +262,20 @@ describe('App', () => {
     fireEvent.change(titleInput, { target: { value: '銀河鉄道の夜' } })
     fireEvent.change(authorInput, { target: { value: '宮沢賢治' } })
     fireEvent.click(addButton)
+    await screen.findByText('銀河鉄道の夜 / 宮沢賢治')
     fireEvent.change(titleInput, { target: { value: 'こころ' } })
     fireEvent.change(authorInput, { target: { value: '夏目漱石' } })
     fireEvent.click(addButton)
+    await screen.findByText('こころ / 夏目漱石')
 
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))).toHaveLength(2)
+    expect(apiBooks).toHaveLength(2)
 
     unmount()
-    render(<App />)
+    await renderApp()
     expect(screen.getByText('銀河鉄道の夜 / 宮沢賢治')).toBeInTheDocument()
     expect(screen.getByText('こころ / 夏目漱石')).toBeInTheDocument()
-    expect(screen.getAllByRole('listitem').filter((item) => within(item).queryByText('積読'))).toHaveLength(2)
-    expect(JSON.parse(localStorage.getItem('book-insight-books')).map((book) => book.status))
+    expect(screen.queryByRole('button', { name: '削除' })).not.toBeInTheDocument()
+    expect(apiBooks.map((book) => book.status))
       .toEqual(['unread', 'unread'])
 
     const restoredTitleInput = screen.getByRole('textbox', { name: '本のタイトル' })
@@ -219,37 +283,79 @@ describe('App', () => {
     fireEvent.change(restoredTitleInput, { target: { value: '人間失格' } })
     fireEvent.change(restoredAuthorInput, { target: { value: '太宰治' } })
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
+    await screen.findByText('人間失格 / 太宰治')
 
-    const books = JSON.parse(localStorage.getItem('book-insight-books'))
+    const books = apiBooks
     expect(books).toHaveLength(3)
     expect(books.map((book) => book.author)).toEqual(['宮沢賢治', '夏目漱石', '太宰治'])
     expect(new Set(books.map((book) => book.id)).size).toBe(3)
 
     const bookToDelete = screen.getAllByRole('listitem')[1]
+    openBook('こころ')
     fireEvent.click(within(bookToDelete).getByRole('button', { name: '削除' }))
 
-    expect(JSON.parse(localStorage.getItem('book-insight-books')).map((book) => book.title))
-      .toEqual(['銀河鉄道の夜', '人間失格'])
+    await waitFor(() => expect(apiBooks.map((book) => book.title))
+      .toEqual(['銀河鉄道の夜', '人間失格']))
   })
 
-  test('以前保存した著者なしの本とメモも表示する', () => {
+  test('以前のlocalStorageの記録は読み込まない', async () => {
     localStorage.setItem('book-insight-books', JSON.stringify([
       { id: 1, title: '銀河鉄道の夜', memo: '読後の感想' },
     ]))
 
-    render(<App />)
+    await renderApp()
 
-    const bookItem = screen.getByRole('listitem')
-    expect(bookItem).toHaveTextContent('銀河鉄道の夜')
-    expect(within(bookItem).getByText('積読')).toBeInTheDocument()
-    expect(bookItem).toHaveTextContent('読後の感想')
-    expect(bookItem).not.toHaveTextContent('undefined')
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+    expect(localStorage.getItem('book-insight-books')).toContain('銀河鉄道の夜')
   })
 
-  test('積読を読了にすると初期評価3と今日の日付を保存し、再表示後も残る', () => {
-    vi.useFakeTimers()
+  test('本を開くまで状態とメモを隠し、別の本を開くと前の本を閉じる', async () => {
+    seedBooks([
+      { id: 1, title: 'こころ', author: '夏目漱石', status: 'read', rating: 5, readDate: null, memo: '読後の感想' },
+      { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
+    ])
+    await renderApp()
+    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+
+    expect(within(firstBook).getByRole('button', { name: 'こころの詳細を開く' })).toHaveAttribute('aria-expanded', 'false')
+    expect(within(firstBook).queryByText('読了 · 5/5')).not.toBeInTheDocument()
+    expect(within(firstBook).queryByText('読後の感想')).not.toBeInTheDocument()
+    expect(within(secondBook).queryByText('積読')).not.toBeInTheDocument()
+
+    openBook('こころ')
+    expect(within(firstBook).getByRole('button', { name: 'こころの詳細を閉じる' })).toHaveAttribute('aria-expanded', 'true')
+    expect(within(firstBook).getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(within(firstBook).getByText('読後の感想')).toBeInTheDocument()
+
+    openBook('雪国')
+    expect(within(firstBook).queryByText('読後の感想')).not.toBeInTheDocument()
+    expect(within(secondBook).getByText('積読')).toBeInTheDocument()
+    fireEvent.click(within(secondBook).getByRole('button', { name: '雪国の詳細を閉じる' }))
+    expect(within(secondBook).queryByText('積読')).not.toBeInTheDocument()
+  })
+
+  test('詳細を閉じると未保存の編集フォームは破棄される', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread' }])
+    await renderApp()
+
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '感想・メモ（任意）' }), {
+      target: { value: '保存しないメモ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '雪国の詳細を閉じる' }))
+    expect(screen.queryByRole('form', { name: '雪国の読了記録' })).not.toBeInTheDocument()
+
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
+    expect(screen.getByRole('textbox', { name: '感想・メモ（任意）' })).toHaveValue('')
+    expect(apiBooks[0].status).toBe('unread')
+  })
+
+  test('積読を読了にすると初期評価3と今日の日付を保存し、再表示後も残る', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2024, 5, 1, 12))
-    const { unmount } = render(<App />)
+    const { unmount } = await renderApp()
 
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: '銀河鉄道の夜' },
@@ -259,17 +365,17 @@ describe('App', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
-    const bookItem = screen.getByRole('listitem')
+    const bookItem = await screen.findByRole('listitem')
     fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
     const form = within(bookItem).getByRole('form', { name: '銀河鉄道の夜の読了記録' })
     expect(within(form).getByRole('combobox', { name: '評価' })).toHaveValue('3')
     expect(within(form).getByLabelText('読了日')).toHaveValue('2024-06-01')
     fireEvent.click(within(form).getByRole('button', { name: '保存' }))
 
-    expect(within(bookItem).getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(await within(bookItem).findByText('読了 · 3/5')).toBeInTheDocument()
     expect(within(bookItem).getByText('2024-06-01')).toBeInTheDocument()
     expect(within(bookItem).queryByRole('button', { name: '読了にする' })).not.toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       status: 'read',
       rating: 3,
       readDate: { precision: 'day', value: '2024-06-01' },
@@ -277,18 +383,20 @@ describe('App', () => {
     })
 
     unmount()
-    render(<App />)
+    await renderApp()
+    openBook('銀河鉄道の夜')
     expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
     expect(screen.getByText('2024-06-01')).toBeInTheDocument()
   })
 
-  test('読了時期を年のみで記録し、評価と感想も保存できる', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('読了時期を年のみで記録し、評価と感想も保存できる', async () => {
+    seedBooks([
       { id: 1, title: 'こころ', author: '夏目漱石', status: 'unread' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
     const bookItem = screen.getByRole('listitem')
+    openBook('こころ')
     fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
     const form = within(bookItem).getByRole('form', { name: 'こころの読了記録' })
     fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
@@ -305,10 +413,10 @@ describe('App', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: '保存' }))
 
-    expect(within(bookItem).getByText('読了 · 5/5')).toBeInTheDocument()
+    expect(await within(bookItem).findByText('読了 · 5/5')).toBeInTheDocument()
     expect(within(bookItem).getByText('2020年')).toBeInTheDocument()
     expect(within(bookItem).getByText('また読みたい')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       status: 'read',
       rating: 5,
       readDate: { precision: 'year', value: '2020' },
@@ -316,18 +424,19 @@ describe('App', () => {
     })
   })
 
-  test('読了時期を不明にでき、キャンセル時は積読のままにする', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('読了時期を不明にでき、キャンセル時は積読のままにする', async () => {
+    seedBooks([
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
     const bookItem = screen.getByRole('listitem')
+    openBook('雪国')
     fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
     const form = within(bookItem).getByRole('form', { name: '雪国の読了記録' })
     fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
     expect(within(bookItem).getByText('積読')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].status).toBe('unread')
+    expect(apiBooks[0].status).toBe('unread')
 
     fireEvent.click(within(bookItem).getByRole('button', { name: '読了にする' }))
     const reopenedForm = within(bookItem).getByRole('form', { name: '雪国の読了記録' })
@@ -337,16 +446,17 @@ describe('App', () => {
     expect(within(reopenedForm).queryByLabelText('読了日')).not.toBeInTheDocument()
     fireEvent.click(within(reopenedForm).getByRole('button', { name: '保存' }))
 
-    expect(within(bookItem).getByText('読了時期不明')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].readDate).toBeNull()
+    expect(await within(bookItem).findByText('読了時期不明')).toBeInTheDocument()
+    expect(apiBooks[0].readDate).toBeNull()
   })
 
-  test('読了年が空なら保存しない', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('読了年が空なら保存しない', async () => {
+    seedBooks([
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
+    openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
     const form = screen.getByRole('form', { name: '雪国の読了記録' })
     fireEvent.change(within(form).getByRole('combobox', { name: '読了時期' }), {
@@ -356,28 +466,30 @@ describe('App', () => {
     fireEvent.submit(form)
 
     expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].status).toBe('unread')
+    expect(apiBooks[0].status).toBe('unread')
   })
 
-  test('選んだ本だけを読了にする', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('選んだ本だけを読了にする', async () => {
+    seedBooks([
       { id: 1, title: 'こころ', author: '夏目漱石', status: 'unread' },
       { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
     const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了にする' }))
     fireEvent.click(within(firstBook).getByRole('button', { name: '保存' }))
 
-    expect(within(firstBook).getByText('読了 · 3/5')).toBeInTheDocument()
+    expect(await within(firstBook).findByText('読了 · 3/5')).toBeInTheDocument()
+    openBook('雪国')
     expect(within(secondBook).getByText('積読')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books')).map((book) => book.status))
+    expect(apiBooks.map((book) => book.status))
       .toEqual(['read', 'unread'])
   })
 
-  test('読了済みの評価・読了時期・メモを編集して保存できる', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('読了済みの評価・読了時期・メモを編集して保存できる', async () => {
+    seedBooks([
       {
         id: 1,
         title: 'こころ',
@@ -388,10 +500,11 @@ describe('App', () => {
         memo: '前の感想',
       },
       { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    const { unmount } = render(<App />)
+    ])
+    const { unmount } = await renderApp()
 
     const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了記録を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころの読了記録を編集' })
     expect(within(form).getByRole('combobox', { name: '評価' })).toHaveValue('5')
@@ -413,11 +526,12 @@ describe('App', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: '保存' }))
 
-    expect(within(firstBook).getByText('読了 · 2/5')).toBeInTheDocument()
+    expect(await within(firstBook).findByText('読了 · 2/5')).toBeInTheDocument()
     expect(within(firstBook).getByText('2023-04-05')).toBeInTheDocument()
     expect(within(firstBook).getByText('新しい感想')).toBeInTheDocument()
+    openBook('雪国')
     expect(within(secondBook).getByText('積読')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       title: 'こころ',
       author: '夏目漱石',
       status: 'read',
@@ -427,13 +541,14 @@ describe('App', () => {
     })
 
     unmount()
-    render(<App />)
+    await renderApp()
+    openBook('こころ')
     expect(screen.getByText('読了 · 2/5')).toBeInTheDocument()
     expect(screen.getByText('新しい感想')).toBeInTheDocument()
   })
 
-  test('読了済みの編集をキャンセルすると保存済みの値を保つ', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('読了済みの編集をキャンセルすると保存済みの値を保つ', async () => {
+    seedBooks([
       {
         id: 1,
         title: '雪国',
@@ -443,9 +558,10 @@ describe('App', () => {
         readDate: null,
         memo: '元の感想',
       },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
+    openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
     const form = screen.getByRole('form', { name: '雪国の読了記録を編集' })
     expect(within(form).getByRole('combobox', { name: '読了時期' })).toHaveValue('unknown')
@@ -459,14 +575,14 @@ describe('App', () => {
 
     expect(screen.getByText('読了 · 3/5')).toBeInTheDocument()
     expect(screen.getByText('元の感想')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].rating).toBe(3)
+    expect(apiBooks[0].rating).toBe(3)
     fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
     expect(screen.getByRole('combobox', { name: '評価' })).toHaveValue('3')
     expect(screen.getByRole('textbox', { name: '感想・メモ（任意）' })).toHaveValue('元の感想')
   })
 
-  test('タイトルと著者を編集し、読了記録を保ったまま保存できる', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('タイトルと著者を編集し、読了記録を保ったまま保存できる', async () => {
+    seedBooks([
       {
         id: 1,
         title: 'こころ',
@@ -477,10 +593,11 @@ describe('App', () => {
         memo: '印象に残った',
       },
       { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    const { unmount } = render(<App />)
+    ])
+    const { unmount } = await renderApp()
 
     const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: 'タイトル・著者を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころのタイトルと著者を編集' })
     expect(within(form).getByRole('textbox', { name: '本のタイトル' })).toHaveValue('こころ')
@@ -493,11 +610,11 @@ describe('App', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: '保存' }))
 
-    expect(within(firstBook).getByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
+    expect(await within(firstBook).findByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
     expect(within(firstBook).getByText('読了 · 5/5')).toBeInTheDocument()
     expect(within(firstBook).getByText('印象に残った')).toBeInTheDocument()
     expect(within(secondBook).getByText('雪国 / 川端康成')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    expect(apiBooks[0]).toMatchObject({
       title: 'こころ 改訂版',
       author: '夏目 漱石',
       status: 'read',
@@ -507,16 +624,17 @@ describe('App', () => {
     })
 
     unmount()
-    render(<App />)
-    expect(screen.getByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
+    await renderApp()
+    expect(await screen.findByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
   })
 
-  test('空白だけのタイトル・著者は保存できず、キャンセルすると元に戻る', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('空白だけのタイトル・著者は保存できず、キャンセルすると元に戻る', async () => {
+    seedBooks([
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
+    openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: 'タイトル・著者を編集' }))
     const form = screen.getByRole('form', { name: '雪国のタイトルと著者を編集' })
     const titleInput = within(form).getByRole('textbox', { name: '本のタイトル' })
@@ -528,7 +646,7 @@ describe('App', () => {
     fireEvent.change(authorInput, { target: { value: '   ' } })
     expect(saveButton).toBeDisabled()
     fireEvent.submit(form)
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].title).toBe('雪国')
+    expect(apiBooks[0].title).toBe('雪国')
     fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
 
     expect(screen.getByText('雪国 / 川端康成')).toBeInTheDocument()
@@ -538,12 +656,13 @@ describe('App', () => {
     expect(within(reopenedForm).getByRole('textbox', { name: '著者' })).toHaveValue('川端康成')
   })
 
-  test('タイトル編集を開くと未保存の読了フォームは閉じる', () => {
-    localStorage.setItem('book-insight-books', JSON.stringify([
+  test('タイトル編集を開くと未保存の読了フォームは閉じる', async () => {
+    seedBooks([
       { id: 1, title: 'こころ', author: '夏目漱石', status: 'read', rating: 3, readDate: null, memo: '元のメモ' },
-    ]))
-    render(<App />)
+    ])
+    await renderApp()
 
+    openBook('こころ')
     fireEvent.click(screen.getByRole('button', { name: '読了記録を編集' }))
     fireEvent.change(screen.getByRole('textbox', { name: '感想・メモ（任意）' }), {
       target: { value: '未保存のメモ' },
@@ -552,11 +671,11 @@ describe('App', () => {
 
     expect(screen.queryByRole('form', { name: 'こころの読了記録を編集' })).not.toBeInTheDocument()
     expect(screen.getByRole('form', { name: 'こころのタイトルと著者を編集' })).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].memo).toBe('元のメモ')
+    expect(apiBooks[0].memo).toBe('元のメモ')
   })
 
   test('本を検索して候補から読了として登録できる', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
+    const fetchMock = searchFetch.mockResolvedValue({
       ok: true,
       text: async () => `
         <rss xmlns:dc="http://purl.org/dc/elements/1.1/"
@@ -570,8 +689,7 @@ describe('App', () => {
           </item></channel>
         </rss>`,
     })
-    vi.stubGlobal('fetch', fetchMock)
-    render(<App />)
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     fireEvent.change(titleInput, { target: { value: '成瀬は天下を取りにいく' } })
@@ -590,7 +708,8 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '読了' }))
     fireEvent.click(within(screen.getByRole('form', { name: '新しい本の読了記録' })).getByRole('button', { name: '追加' }))
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0]).toMatchObject({
+    await screen.findByText('成瀬は天下を取りにいく / 宮島未奈')
+    expect(apiBooks[0]).toMatchObject({
       title: '成瀬は天下を取りにいく',
       author: '宮島未奈',
       coverUrl: 'https://covers.openlibrary.org/b/isbn/9784103549512-S.jpg?default=false',
@@ -602,7 +721,7 @@ describe('App', () => {
   })
 
   test('積読に登録した書影は再表示後も残り、画像取得に失敗したら代替表示にする', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    searchFetch.mockResolvedValue({
       ok: true,
       text: async () => `
         <rss xmlns:dc="http://purl.org/dc/elements/1.1/"
@@ -613,8 +732,8 @@ describe('App', () => {
             <dc:identifier xsi:type="dcndl:ISBN">978-4-10-100101-2</dc:identifier>
           </item></channel>
         </rss>`,
-    }))
-    const { unmount } = render(<App />)
+    })
+    const { unmount } = await renderApp()
 
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
     fireEvent.click(screen.getByRole('button', { name: '検索' }))
@@ -622,12 +741,12 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
     const coverUrl = 'https://covers.openlibrary.org/b/isbn/9784101001012-S.jpg?default=false'
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBe(coverUrl)
-    const bookItem = screen.getByRole('listitem')
+    const bookItem = await screen.findByRole('listitem')
+    expect(apiBooks[0].coverUrl).toBe(coverUrl)
     expect(within(bookItem).getByRole('img', { name: '雪国の書影' })).toHaveAttribute('src', coverUrl)
 
     unmount()
-    render(<App />)
+    await renderApp()
     const restoredImage = within(screen.getByRole('listitem')).getByRole('img', { name: '雪国の書影' })
     expect(restoredImage).toHaveAttribute('src', coverUrl)
     fireEvent.error(restoredImage)
@@ -635,7 +754,7 @@ describe('App', () => {
   })
 
   test('候補を選んだ後にタイトルを手入力で変えると元の書影を保存しない', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    searchFetch.mockResolvedValue({
       ok: true,
       text: async () => `
         <rss xmlns:dc="http://purl.org/dc/elements/1.1/"
@@ -646,8 +765,8 @@ describe('App', () => {
             <dc:identifier xsi:type="dcndl:ISBN">978-4-10-100101-2</dc:identifier>
           </item></channel>
         </rss>`,
-    }))
-    render(<App />)
+    })
+    await renderApp()
 
     const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
     fireEvent.change(titleInput, { target: { value: '雪国' } })
@@ -656,12 +775,13 @@ describe('App', () => {
     fireEvent.change(titleInput, { target: { value: '別の本' } })
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
-    expect(JSON.parse(localStorage.getItem('book-insight-books'))[0].coverUrl).toBeNull()
+    await screen.findByRole('listitem')
+    expect(apiBooks[0].coverUrl).toBeNull()
     expect(within(screen.getByRole('listitem')).getByText('書影なし')).toBeInTheDocument()
   })
 
   test('雪国を検索したら無関係な題名を除き、完全一致を先に表示する', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    searchFetch.mockResolvedValue({
       ok: true,
       text: async () => `
         <rss><channel>
@@ -669,8 +789,8 @@ describe('App', () => {
           <item><title>雪国の文学</title><guid>related</guid></item>
           <item><title>雪国</title><guid>exact</guid></item>
         </channel></rss>`,
-    }))
-    render(<App />)
+    })
+    await renderApp()
 
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: '雪国' },
@@ -683,7 +803,7 @@ describe('App', () => {
   })
 
   test('何者を検索したら先頭一致を途中一致より優先する', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
+    const fetchMock = searchFetch.mockResolvedValue({
       ok: true,
       text: async () => `
         <rss><channel>
@@ -693,8 +813,7 @@ describe('App', () => {
           <item><title>何者</title><guid>exact</guid></item>
         </channel></rss>`,
     })
-    vi.stubGlobal('fetch', fetchMock)
-    render(<App />)
+    await renderApp()
 
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: '何者' },
@@ -708,8 +827,8 @@ describe('App', () => {
   })
 
   test('検索に失敗したらエラーを表示する', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')))
-    render(<App />)
+    searchFetch.mockRejectedValue(new Error('Network error'))
+    await renderApp()
 
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), {
       target: { value: '銀河鉄道' },
@@ -717,5 +836,69 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '検索' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('検索できませんでした')
+  })
+
+  test('一覧取得に失敗したら再試行できる', async () => {
+    failingMethod = 'GET'
+    await renderApp()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('記録を読み込めませんでした')
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: '川端康成' } })
+    expect(screen.getByRole('button', { name: '追加' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: '再読み込み' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '追加' })).toBeEnabled()
+  })
+
+  test('登録に失敗したら入力を保ち、再試行でAPIに登録する', async () => {
+    await renderApp()
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: '川端康成' } })
+    failingMethod = 'POST'
+
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('登録できませんでした')
+    expect(screen.getByRole('textbox', { name: '本のタイトル' })).toHaveValue('雪国')
+    expect(apiBooks).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+    expect(await screen.findByText('雪国 / 川端康成')).toBeInTheDocument()
+    expect(apiBooks).toHaveLength(1)
+    expect(localStorage.getItem('book-insight-books')).toBeNull()
+  })
+
+  test('更新に失敗したら元の本と編集フォームを保つ', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', coverUrl: null, status: 'unread' }])
+    await renderApp()
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
+    failingMethod = 'PATCH'
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('読了記録を保存できませんでした')
+    expect(screen.getByRole('form', { name: '雪国の読了記録' })).toBeInTheDocument()
+    expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
+    expect(apiBooks[0].status).toBe('unread')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(await screen.findByText('読了 · 3/5')).toBeInTheDocument()
+  })
+
+  test('削除に失敗したら本を残し、再試行で削除する', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', coverUrl: null, status: 'unread' }])
+    await renderApp()
+    openBook('雪国')
+    failingMethod = 'DELETE'
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('削除できませんでした')
+    expect(screen.getByText('雪国 / 川端康成')).toBeInTheDocument()
+    expect(apiBooks).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }))
+    await waitFor(() => expect(screen.queryByText('雪国 / 川端康成')).not.toBeInTheDocument())
+    expect(apiBooks).toEqual([])
   })
 })
