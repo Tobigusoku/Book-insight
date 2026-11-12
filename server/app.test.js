@@ -50,8 +50,8 @@ test('DELETE removes only the requested book and returns no content', async () =
   expect(response.status).toBe(204)
   expect(await response.text()).toBe('')
   expect(await (await fetch(`${baseUrl}/api/books`)).json()).toEqual([
-    { id: 1, title: 'First', author: 'Author A', coverUrl: null, status: 'unread' },
-    { id: 3, title: 'Third', author: 'Author C', coverUrl: null, status: 'unread' },
+    { id: 1, title: 'First', author: 'Author A', coverUrl: null, memo: '', status: 'unread' },
+    { id: 3, title: 'Third', author: 'Author C', coverUrl: null, memo: '', status: 'unread' },
   ])
 
   const newBook = await postBook({ title: 'Fourth', author: 'Author D' })
@@ -92,6 +92,7 @@ test('本を登録すると201と積読の記録を返す', async () => {
     title: '雪国',
     author: '川端康成',
     coverUrl: null,
+    memo: '',
     status: 'unread',
   })
 
@@ -115,8 +116,8 @@ test('POSTで登録した本をGETで登録順に取得できる', async () => {
 
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual([
-    { id: 1, title: '雪国', author: '川端康成', coverUrl: null, status: 'unread' },
-    { id: 2, title: 'こころ', author: '夏目漱石', coverUrl: null, status: 'unread' },
+    { id: 1, title: '雪国', author: '川端康成', coverUrl: null, memo: '', status: 'unread' },
+    { id: 2, title: 'こころ', author: '夏目漱石', coverUrl: null, memo: '', status: 'unread' },
   ])
 })
 
@@ -126,11 +127,11 @@ test('書影URLつきの積読を登録できる', async () => {
 
   expect(response.status).toBe(201)
   expect(await response.json()).toEqual({
-    id: 1, title: '雪国', author: '川端康成', coverUrl, status: 'unread',
+    id: 1, title: '雪国', author: '川端康成', coverUrl, memo: '', status: 'unread',
   })
 })
 
-test('積読のタイトル・著者・書影だけを更新できる', async () => {
+test('積読のタイトル・著者・書影を更新できる', async () => {
   await postBook({ title: ' 雪国 ', author: '川端康成' })
   const coverUrl = 'https://covers.openlibrary.org/b/isbn/9784101001012-S.jpg?default=false'
 
@@ -138,10 +139,33 @@ test('積読のタイトル・著者・書影だけを更新できる', async ()
 
   expect(response.status).toBe(200)
   const updated = {
-    id: 1, title: '雪国 新版', author: '川端 康成', coverUrl, status: 'unread',
+    id: 1, title: '雪国 新版', author: '川端 康成', coverUrl, memo: '', status: 'unread',
   }
   expect(await response.json()).toEqual(updated)
   expect(await (await fetch(`${baseUrl}/api/books`)).json()).toEqual([updated])
+})
+
+test('積読のメモを登録・編集・削除できる', async () => {
+  const created = await postBook({ title: '雪国', author: '川端康成', memo: ' 読みながら考える ' })
+  expect(created.status).toBe(201)
+  expect((await created.json()).memo).toBe('読みながら考える')
+
+  const edited = await patchBook(1, { memo: ' 気になった一節 ' })
+  expect(edited.status).toBe(200)
+  expect((await edited.json()).memo).toBe('気になった一節')
+
+  const cleared = await patchBook(1, { memo: '   ' })
+  expect(cleared.status).toBe(200)
+  expect((await cleared.json()).memo).toBe('')
+})
+
+test('積読のメモは読了に変えても残る', async () => {
+  await postBook({ title: '雪国', author: '川端康成', memo: '途中のメモ' })
+
+  const response = await patchBook(1, { status: 'read' })
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ status: 'read', rating: 3, memo: '途中のメモ' })
 })
 
 test('積読を評価・読了年・メモつきで読了にできる', async () => {
@@ -203,6 +227,7 @@ test.each([
   [{ status: 'reading' }, 'Status must be unread or read'],
   [{ coverUrl: 'javascript:alert(1)' }, 'Cover URL must be an HTTP(S) URL or null'],
   [{ rating: 3 }, 'Unread books cannot have read details'],
+  [{ memo: 3 }, 'Memo must be a string'],
 ])('積読への不正なPATCHは元の本を変えない: %j', async (body, error) => {
   const original = await (await postBook({ title: '雪国', author: '川端康成' })).json()
 
@@ -264,6 +289,7 @@ test.each([
   [{ coverUrl: 'javascript:alert(1)' }, 'Cover URL must be an HTTP(S) URL or null'],
   [{ coverUrl: 123 }, 'Cover URL must be an HTTP(S) URL or null'],
   [{ status: 'unread', rating: 3 }, 'Unread books cannot have read details'],
+  [{ status: 'unread', memo: 123 }, 'Memo must be a string'],
   [{ status: 'read', rating: 0 }, 'Rating must be an integer from 1 to 5'],
   [{ status: 'read', rating: 2.5 }, 'Rating must be an integer from 1 to 5'],
   [{ status: 'read', readDate: { precision: 'year', value: '20' } }, 'Read date must be a valid day, year, or null'],

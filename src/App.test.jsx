@@ -45,7 +45,7 @@ describe('App', () => {
       if (method === 'GET') return apiResponse(apiBooks)
       if (method === 'POST') {
         const inputBook = JSON.parse(options.body)
-        const book = { id: nextId++, coverUrl: null, ...inputBook }
+        const book = { id: nextId++, coverUrl: null, memo: '', ...inputBook }
         apiBooks.push(book)
         return apiResponse(book, 201)
       }
@@ -101,12 +101,80 @@ describe('App', () => {
       author: '宮沢賢治',
       status: 'unread',
     })
-    expect(apiBooks[0]).not.toHaveProperty('memo')
+    expect(apiBooks[0].memo).toBe('')
     expect(apiBooks[0].coverUrl).toBeNull()
     expect(within(bookItem).getByText('書影なし')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '感想・メモ' })).not.toBeInTheDocument()
     expect(titleInput).toHaveValue('')
     expect(authorInput).toHaveValue('')
+  })
+
+  test('積読として登録するときメモも保存できる', async () => {
+    await renderApp()
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: '川端康成' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'メモ（任意）' }), { target: { value: ' 途中のメモ ' } })
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    expect(await screen.findByText('途中のメモ')).toBeInTheDocument()
+    expect(apiBooks[0]).toMatchObject({ status: 'unread', memo: '途中のメモ' })
+    expect(screen.getByRole('textbox', { name: 'メモ（任意）' })).toHaveValue('')
+  })
+
+  test('積読のメモを編集し、読了にした後も引き継ぐ', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '最初のメモ' }])
+    await renderApp()
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
+    const memoForm = screen.getByRole('form', { name: '雪国のメモを編集' })
+    fireEvent.change(within(memoForm).getByRole('textbox', { name: 'メモ（任意）' }), {
+      target: { value: ' 読んでいる途中の感想 ' },
+    })
+    fireEvent.click(within(memoForm).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(screen.queryByRole('form', { name: '雪国のメモを編集' })).not.toBeInTheDocument())
+    expect(screen.getByText('読んでいる途中の感想')).toBeInTheDocument()
+    expect(apiBooks[0]).toMatchObject({ status: 'unread', memo: '読んでいる途中の感想' })
+
+    fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
+    const readForm = screen.getByRole('form', { name: '雪国の読了記録' })
+    expect(within(readForm).getByRole('textbox', { name: '感想・メモ（任意）' })).toHaveValue('読んでいる途中の感想')
+    fireEvent.click(within(readForm).getByRole('button', { name: '保存' }))
+
+    expect(await screen.findByText('読了 · 3/5')).toBeInTheDocument()
+    expect(apiBooks[0]).toMatchObject({ status: 'read', memo: '読んでいる途中の感想' })
+  })
+
+  test('積読のメモ編集をキャンセルしても保存済みのメモは変わらない', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '元のメモ' }])
+    await renderApp()
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
+    const form = screen.getByRole('form', { name: '雪国のメモを編集' })
+    fireEvent.change(within(form).getByRole('textbox', { name: 'メモ（任意）' }), { target: { value: '変更後' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'キャンセル' }))
+
+    expect(screen.getByText('元のメモ')).toBeInTheDocument()
+    expect(apiBooks[0].memo).toBe('元のメモ')
+  })
+
+  test('積読のメモ保存に失敗したら編集内容を残して再試行できる', async () => {
+    seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '元のメモ' }])
+    await renderApp()
+    openBook('雪国')
+    fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
+    const form = screen.getByRole('form', { name: '雪国のメモを編集' })
+    fireEvent.change(within(form).getByRole('textbox', { name: 'メモ（任意）' }), { target: { value: '新しいメモ' } })
+    failingMethod = 'PATCH'
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('メモを保存できませんでした')
+    expect(within(form).getByRole('textbox', { name: 'メモ（任意）' })).toHaveValue('新しいメモ')
+    expect(apiBooks[0].memo).toBe('元のメモ')
+
+    fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.queryByRole('form', { name: '雪国のメモを編集' })).not.toBeInTheDocument())
+    expect(screen.getByText('新しいメモ')).toBeInTheDocument()
   })
 
   test('タイトルと著者の両方がないと追加できない', async () => {
@@ -224,7 +292,7 @@ describe('App', () => {
     await screen.findByRole('listitem')
     const book = apiBooks[0]
     expect(book.status).toBe('unread')
-    expect(book).not.toHaveProperty('memo')
+    expect(book.memo).toBe('')
     expect(within(screen.getByRole('listitem')).getByText('積読')).toBeInTheDocument()
   })
 

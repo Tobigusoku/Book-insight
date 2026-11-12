@@ -52,6 +52,28 @@ function BookInfoForm({ book, onSave, onCancel, canSave = true }) {
   )
 }
 
+function MemoForm({ book, onSave, onCancel, canSave = true }) {
+  const [memo, setMemo] = useState(book.memo || '')
+
+  const saveMemo = (event) => {
+    event.preventDefault()
+    onSave(book.id, { memo: memo.trim() })
+  }
+
+  return (
+    <form className="book-edit-form" aria-label={`${book.title}のメモを編集`} onSubmit={saveMemo}>
+      <label>
+        メモ（任意）
+        <textarea value={memo} onChange={(event) => setMemo(event.target.value)} />
+      </label>
+      <div className="book-edit-actions">
+        <button type="submit" disabled={!canSave}>保存</button>
+        <button type="button" onClick={onCancel} disabled={!canSave}>キャンセル</button>
+      </div>
+    </form>
+  )
+}
+
 function ReadBookForm({ book, onSave, onCancel, isNew = false, canSave = true }) {
   const today = new Date()
   const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
@@ -128,11 +150,13 @@ function App() {
   const [author, setAuthor] = useState('')
   const [selectedCoverUrl, setSelectedCoverUrl] = useState(null)
   const [registrationStatus, setRegistrationStatus] = useState('unread')
+  const [unreadMemo, setUnreadMemo] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searchStatus, setSearchStatus] = useState('idle')
   const [expandedBookId, setExpandedBookId] = useState(null)
   const [readingBookId, setReadingBookId] = useState(null)
   const [editingInfoBookId, setEditingInfoBookId] = useState(null)
+  const [editingMemoBookId, setEditingMemoBookId] = useState(null)
   const [books, setBooks] = useState([])
   const [bookStatus, setBookStatus] = useState('loading')
   const [bookError, setBookError] = useState('')
@@ -224,6 +248,7 @@ function App() {
     setExpandedBookId((current) => current === id ? null : id)
     setReadingBookId(null)
     setEditingInfoBookId(null)
+    setEditingMemoBookId(null)
   }
 
   const addBook = async (readDetails) => {
@@ -236,7 +261,7 @@ function App() {
       title: bookTitle,
       author: bookAuthor,
       coverUrl: selectedCoverUrl,
-      ...(readDetails || {}),
+      ...(readDetails || { memo: unreadMemo.trim() }),
       status: readDetails ? 'read' : 'unread',
     }
 
@@ -250,6 +275,7 @@ function App() {
       setAuthor('')
       setSelectedCoverUrl(null)
       setRegistrationStatus('unread')
+      setUnreadMemo('')
       latestSearch.current += 1
       setSearchResults([])
       setSearchStatus('idle')
@@ -270,6 +296,7 @@ function App() {
       setExpandedBookId((current) => current === id ? null : current)
       setReadingBookId((current) => current === id ? null : current)
       setEditingInfoBookId((current) => current === id ? null : current)
+      setEditingMemoBookId((current) => current === id ? null : current)
     } catch {
       setBookError('削除できませんでした。もう一度お試しください')
     } finally {
@@ -307,6 +334,21 @@ function App() {
     }
   }
 
+  const updateBookMemo = async (id, details) => {
+    if (saving || bookStatus !== 'ready') return
+    setSaving(true)
+    setBookError('')
+    try {
+      const updated = await updateBook(id, details)
+      setBooks((current) => current.map((book) => book.id === id ? updated : book))
+      setEditingMemoBookId(null)
+    } catch {
+      setBookError('メモを保存できませんでした。もう一度お試しください')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <main className="app">
       <h1>Book Insight</h1>
@@ -335,6 +377,12 @@ function App() {
             読了
           </button>
         </div>
+        {registrationStatus === 'unread' && (
+          <>
+            <label htmlFor="unread-memo">メモ（任意）</label>
+            <textarea id="unread-memo" value={unreadMemo} onChange={(event) => setUnreadMemo(event.target.value)} />
+          </>
+        )}
         <div className="book-form-actions">
           <button type="button" onClick={searchBooks} disabled={!title.trim() || searchStatus === 'loading'}>
             検索
@@ -419,9 +467,12 @@ function App() {
                   ) : (
                     <p>積読</p>
                   )}
-                  {book.memo && readingBookId !== book.id && <p className="book-memo">{book.memo}</p>}
+                  {book.memo && readingBookId !== book.id && editingMemoBookId !== book.id && <p className="book-memo">{book.memo}</p>}
                   {editingInfoBookId === book.id && (
                     <BookInfoForm book={book} onSave={updateBookInfo} onCancel={() => setEditingInfoBookId(null)} canSave={!saving} />
+                  )}
+                  {editingMemoBookId === book.id && (
+                    <MemoForm book={book} onSave={updateBookMemo} onCancel={() => setEditingMemoBookId(null)} canSave={!saving} />
                   )}
                   {readingBookId === book.id && (
                     <ReadBookForm book={book} onSave={completeBook} onCancel={() => setReadingBookId(null)} canSave={!saving} />
@@ -430,14 +481,23 @@ function App() {
                     {editingInfoBookId !== book.id && (
                       <button type="button" disabled={saving} onClick={() => {
                         setReadingBookId(null)
+                        setEditingMemoBookId(null)
                         setEditingInfoBookId(book.id)
                       }}>タイトル・著者を編集</button>
                     )}
                     {readingBookId !== book.id && (
                       <button type="button" disabled={saving} onClick={() => {
                         setEditingInfoBookId(null)
+                        setEditingMemoBookId(null)
                         setReadingBookId(book.id)
                       }}>{book.status === 'read' ? '読了記録を編集' : '読了にする'}</button>
+                    )}
+                    {book.status === 'unread' && editingMemoBookId !== book.id && (
+                      <button type="button" disabled={saving} onClick={() => {
+                        setEditingInfoBookId(null)
+                        setReadingBookId(null)
+                        setEditingMemoBookId(book.id)
+                      }}>{book.memo ? 'メモを編集' : 'メモを書く'}</button>
                     )}
                     <button type="button" onClick={() => deleteBook(book.id)} disabled={saving}>削除</button>
                   </div>
