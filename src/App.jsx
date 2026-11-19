@@ -5,6 +5,14 @@ import './App.css'
 const dcNamespace = 'http://purl.org/dc/elements/1.1/'
 const xsiNamespace = 'http://www.w3.org/2001/XMLSchema-instance'
 
+function formatNdlAuthor(author) {
+  if (!author) return ''
+
+  const name = author.replace(/,\s*\d{4}-(?:\d{4})?\s*$/, '').trim()
+  const parts = name.split(',').map((part) => part.trim())
+  return parts.length === 2 && parts.every(Boolean) ? parts.join(' ') : name
+}
+
 function BookCover({ book }) {
   const [failed, setFailed] = useState(false)
 
@@ -222,7 +230,7 @@ function App() {
         return {
           key: item.getElementsByTagName('guid')[0]?.textContent.trim(),
           title: item.getElementsByTagName('title')[0]?.textContent.trim(),
-          author: item.getElementsByTagNameNS(dcNamespace, 'creator')[0]?.textContent.trim(),
+          author: formatNdlAuthor(item.getElementsByTagNameNS(dcNamespace, 'creator')[0]?.textContent.trim()),
           coverUrl: isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-S.jpg?default=false` : null,
         }
       })
@@ -269,8 +277,12 @@ function App() {
     setBookError('')
     try {
       const newBook = await createBook(input)
-      setBooks((current) => [...current, newBook])
+      setBooks([])
+      setBookStatus('loading')
       setExpandedBookId(newBook.id)
+      setReadingBookId(null)
+      setEditingInfoBookId(null)
+      setEditingMemoBookId(null)
       setTitle('')
       setAuthor('')
       setSelectedCoverUrl(null)
@@ -279,6 +291,13 @@ function App() {
       latestSearch.current += 1
       setSearchResults([])
       setSearchStatus('idle')
+      try {
+        setBooks(await getBooks())
+        setBookStatus('ready')
+      } catch {
+        setBookError('登録は完了しましたが一覧を読み込めませんでした。再読み込みしてください')
+        setBookStatus('error')
+      }
     } catch {
       setBookError('登録できませんでした。もう一度お試しください')
     } finally {
@@ -434,14 +453,15 @@ function App() {
         {bookStatus === 'loading' && <p role="status">記録を読み込み中...</p>}
         {bookStatus === 'error' && (
           <div>
-            <p role="alert">記録を読み込めませんでした。APIサーバーを確認してください</p>
+            <p role="alert">{bookError || '記録を読み込めませんでした。APIサーバーを確認してください'}</p>
             <button type="button" onClick={() => {
+              setBookError('')
               setBookStatus('loading')
               setReloadBooks((count) => count + 1)
             }}>再読み込み</button>
           </div>
         )}
-        {bookError && <p role="alert">{bookError}</p>}
+        {bookError && bookStatus !== 'error' && <p role="alert">{bookError}</p>}
         <ul>
           {books.map((book) => (
             <li key={book.id}>

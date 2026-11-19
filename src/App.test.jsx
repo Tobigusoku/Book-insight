@@ -109,6 +109,44 @@ describe('App', () => {
     expect(authorInput).toHaveValue('')
   })
 
+  test('APIサーバー再起動後の追加で古い本とIDが重なっても一覧を同期する', async () => {
+    seedBooks([{ id: 1, title: '古い本', author: '著者A', status: 'unread', memo: '' }])
+    const { unmount } = await renderApp()
+    openBook('古い本')
+
+    seedBooks([])
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '新しい本' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: '著者B' } })
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    await screen.findByText('新しい本 / 著者B')
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.queryByText('古い本 / 著者A')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新しい本の詳細を閉じる' })).toHaveAttribute('aria-expanded', 'true')
+
+    unmount()
+    await renderApp()
+    expect(screen.getByText('新しい本 / 著者B')).toBeInTheDocument()
+  })
+
+  test('登録後の一覧再取得が失敗しても二重登録せず再読み込みできる', async () => {
+    await renderApp()
+    const titleInput = screen.getByRole('textbox', { name: '本のタイトル' })
+    fireEvent.change(titleInput, { target: { value: '雪国' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: '川端康成' } })
+    failingMethod = 'GET'
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('登録は完了しましたが一覧を読み込めませんでした')
+    expect(apiBooks).toHaveLength(1)
+    expect(titleInput).toHaveValue('')
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '再読み込み' }))
+    expect(await screen.findByText('雪国 / 川端康成')).toBeInTheDocument()
+    expect(apiBooks).toHaveLength(1)
+  })
+
   test('積読として登録するときメモも保存できる', async () => {
     await renderApp()
     fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
@@ -786,6 +824,47 @@ describe('App', () => {
     })
     expect(within(screen.getByRole('listitem')).getByRole('img', { name: '成瀬は天下を取りにいくの書影' }))
       .toHaveAttribute('src', 'https://covers.openlibrary.org/b/isbn/9784103549512-S.jpg?default=false')
+  })
+
+  test.each([
+    ['殊能, 将之, 1964-2013', '殊能 将之'],
+    ['山田, 太郎, 1950-', '山田 太郎'],
+    ['山田, 太郎', '山田 太郎'],
+    ['宮島未奈', '宮島未奈'],
+    ['編集部, 出版社, 監修', '編集部, 出版社, 監修'],
+  ])('NDLの著者表記 %s を検索候補と登録情報で %s にする', async (rawAuthor, expectedAuthor) => {
+    searchFetch.mockResolvedValue({
+      ok: true,
+      text: async () => `
+        <rss xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <channel><item>
+            <title>雪国</title><guid>book-1</guid>
+            <dc:creator>${rawAuthor}</dc:creator>
+          </item></channel>
+        </rss>`,
+    })
+    await renderApp()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.click(screen.getByRole('button', { name: '検索' }))
+    const selectButton = await screen.findByRole('button', { name: '雪国を選択' })
+    expect(screen.getByText(expectedAuthor)).toBeInTheDocument()
+    fireEvent.click(selectButton)
+
+    expect(screen.getByRole('textbox', { name: '著者' })).toHaveValue(expectedAuthor)
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+    await screen.findByRole('listitem')
+    expect(apiBooks[0].author).toBe(expectedAuthor)
+  })
+
+  test('手入力した著者名はNDL用の整形をしない', async () => {
+    await renderApp()
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '著者' }), { target: { value: 'Smith, Adam' } })
+    fireEvent.click(screen.getByRole('button', { name: '追加' }))
+
+    await screen.findByRole('listitem')
+    expect(apiBooks[0].author).toBe('Smith, Adam')
   })
 
   test('積読に登録した書影は再表示後も残り、画像取得に失敗したら代替表示にする', async () => {

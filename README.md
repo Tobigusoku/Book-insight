@@ -2,16 +2,16 @@
 
 書籍を検索して「積読」「読了」を記録する、個人開発の読書記録アプリです。Webアプリの基礎を学びながら、バックエンド・データベース・データ活用まで段階的に作ることを目指しています。
 
-> 開発中です。画面はExpress APIを通じて本を記録します。保存先はサーバーのメモリなので、APIサーバーを再起動すると記録は消えます。以前の `localStorage` の記録は読み込みません。
+> 開発中です。画面はExpress APIを通じて本を記録し、ローカルのPostgreSQLに保存します。以前のサーバーメモリと `localStorage` の記録は移行・読み込みしません。
 
 ## 現在できること
 
-- 国立国会図書館サーチの OpenSearch APIで本を検索し、候補からタイトル・著者を入力できます。見つからない本は手入力できます。
+- 国立国会図書館サーチの OpenSearch APIで本を検索し、候補からタイトル・著者を入力できます。NDL由来の著者名は末尾の生没年と姓・名のコンマを整えます。見つからない本は手入力できます。
 - 検索候補にISBNがあれば、Open Libraryの書影を検索結果に表示します。候補を選んで登録すると書影URLも記録に保存し、一覧で表示します。画像がない・取得できない場合は代替表示にします。
 - 本を積読または読了として登録し、一覧表示、タイトル・著者の編集、削除ができます。一覧では本を押すと状態・評価・読了時期・メモと操作ボタンが開きます。
 - 積読・読了のどちらにも任意のメモを記録・編集でき、読了への変更時にも引き継ぎます。読了した本には1〜5の評価と読了時期（年月日・年のみ・不明）を記録・編集できます。
-- 画面からExpress APIを呼び、`POST /api/books` で登録、`GET /api/books` で一覧取得、`PATCH /api/books/:id` で更新、`DELETE /api/books/:id` で削除できます。通信失敗時はエラーを表示し、失敗した変更は画面に反映しません。
-- 本の記録はAPIサーバーのメモリに一時保存します。ブラウザの再読み込みでは残りますが、APIサーバーの再起動で消えます。
+- 画面からExpress APIを呼び、`POST /api/books` で登録、`GET /api/books` で一覧取得、`PATCH /api/books/:id` で更新、`DELETE /api/books/:id` で削除できます。登録後は一覧を再取得してサーバーの記録と同期します。通信失敗時はエラーを表示し、登録後の一覧取得だけが失敗した場合は再読み込みを案内します。
+- 本の記録はPostgreSQLに保存し、APIサーバーを再起動しても残ります。
 
 ## 技術構成
 
@@ -19,27 +19,38 @@
 | --- | --- |
 | 画面 | React、JavaScript/JSX、Vite、CSS |
 | 書籍検索・書影 | 国立国会図書館サーチ OpenSearch API、Open Library Covers |
-| API | Node.js、Express |
-| テスト | Vitest、React Testing Library、jsdom、HTTP通信を使うAPIテスト |
-| 保存 | APIサーバーのプロセス内メモリ（DBは未実装） |
+| API | Node.js、Express、pg |
+| テスト | Vitest、React Testing Library、jsdom、PostgreSQLを使うHTTP APIテスト |
+| 保存 | PostgreSQL（ローカルではDockerで起動） |
 
 現状のデータの流れは次のとおりです。
 
 ```text
 ブラウザ（React） ──検索──> 国立国会図書館サーチ
        │                         └─ ISBNからOpen Libraryの書影URLを生成
-       └──記録の操作──> Express API（POST・GET・PATCH・DELETE /api/books） <──> サーバーのメモリ
+       └──記録の操作──> Express API（POST・GET・PATCH・DELETE /api/books） <──> PostgreSQL
 ```
 
-PostgreSQLによる永続化、分析・推薦、他メディアへの拡張は未実装です。サーバーの記録は再起動すると消えます。
+PostgreSQL用のテーブル定義は `db/schema.sql` に、制約の確認用SQLは `db/schema.test.sql` にあります。APIはDBへ接続済みです。分析・推薦、他メディアへの拡張は未実装です。
 
 ## ローカルで動かす
 
-Node.jsとnpmが必要です。リポジトリのルートで依存関係をインストールします。
+Node.js、npm、Docker Desktopが必要です。リポジトリのルートで依存関係をインストールします。
 
 ```bash
 npm ci
 ```
+
+初回はPostgreSQLコンテナとテスト用DBを作り、両方にテーブルを作成します。`YOUR_LOCAL_PASSWORD`は自分のローカル用パスワードに置き換えてください。以下はWindowsの`cmd`で、リポジトリのルートから実行する例です。
+
+```cmd
+docker run --name book-insight-postgres -e POSTGRES_PASSWORD=YOUR_LOCAL_PASSWORD -e POSTGRES_DB=book_insight -p 127.0.0.1:5432:5432 -v book-insight-pgdata:/var/lib/postgresql/data -d postgres:17
+docker exec book-insight-postgres createdb -U postgres book_insight_test
+docker exec -i book-insight-postgres psql -U postgres -d book_insight -v ON_ERROR_STOP=1 < db\schema.sql
+docker exec -i book-insight-postgres psql -U postgres -d book_insight_test -v ON_ERROR_STOP=1 < db\schema.sql
+```
+
+2回目以降、コンテナが停止していれば `docker start book-insight-postgres` で再開します。`.env.example` を `.env.local` にコピーして `YOUR_PASSWORD` を同じパスワードに変更してください。`.env.local` はGitの管理対象外です。DBの構造を変える場合、このSQLをそのまま再実行せず、変更用のSQLを別途用意します。
 
 2つのターミナルで、それぞれAPIサーバーとViteを起動します。
 
@@ -72,16 +83,16 @@ Viteが表示するURL（通常は `http://localhost:5173/`）で画面を開き
 ## テストと確認
 
 ```bash
-npx vitest run --pool=forks
+npm test -- --run
 npm run lint
 npm run build
 ```
 
-画面のテストは外部検索APIと書籍APIの応答をモックし、入力・検索・登録・編集・削除・通信失敗を確認します。APIのテストは実際のHTTPリクエストで正常系と入力エラーを確認します。
+画面のテストは外部検索APIと書籍APIの応答をモックします。APIのテストは `book_insight_test` の本を各テストの前に消してから、実際のHTTPリクエストでCRUD、入力エラー、サーバー再起動後の保存を確認します。テスト用DBには残したい記録を入れないでください。
 
 ## 今後の方向
 
-次はローカル環境でPostgreSQLを導入し、既存のExpress APIの保存先を段階的に切り替えます。ReactとExpressの役割分担は維持し、API設計・SQL・データ永続化の理解を優先します。書影の手元画像による追加・差し替え、分析や推薦、機械学習、他メディア対応は必要性を見て判断します。
+次はAPIからSQLを実行する流れとDB接続・エラー処理を理解し、保存の動作を手元で確認します。ReactとExpressの役割分担は維持します。書影の手元画像による追加・差し替え、分析や推薦、機械学習、他メディア対応は必要性を見て判断します。
 
 ### 友人からのフィードバックと公開方針
 

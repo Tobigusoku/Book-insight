@@ -1,4 +1,5 @@
 import express from 'express'
+import { createBookRepository } from './bookRepository.js'
 
 function isValidCoverUrl(value) {
   if (value === null) return true
@@ -16,29 +17,29 @@ function isValidReadDate(value) {
   if (value === null) return true
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   if (value.precision === 'year') {
-    return typeof value.value === 'string' && /^\d{4}$/.test(value.value)
+    return typeof value.value === 'string' && /^\d{4}$/.test(value.value) && Number(value.value) > 0
   }
   if (value.precision !== 'day' || typeof value.value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.value)) {
     return false
   }
+  if (value.value.startsWith('0000-')) return false
 
   // Date normalizes impossible days, so compare the parsed value with the original.
   const date = new Date(`${value.value}T00:00:00Z`)
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value.value
 }
 
-export function createApp() {
+export function createApp(pool) {
   const app = express()
-  const books = []
-  let nextBookId = 1
+  const books = createBookRepository(pool)
 
   app.use(express.json({ strict: false }))
 
-  app.get('/api/books', (_req, res) => {
-    return res.json(books)
+  app.get('/api/books', async (_req, res) => {
+    return res.json(await books.list())
   })
 
-  app.post('/api/books', (req, res) => {
+  app.post('/api/books', async (req, res) => {
     const input = req.body ?? {}
     const { title, author, status = 'unread', coverUrl = null, memo = '' } = input
 
@@ -74,8 +75,7 @@ export function createApp() {
       }
     }
 
-    const book = {
-      id: nextBookId,
+    const inputBook = {
       title: title.trim(),
       author: author.trim(),
       coverUrl: coverUrl === null ? null : coverUrl.trim(),
@@ -83,20 +83,17 @@ export function createApp() {
       ...readDetails,
       status,
     }
-    nextBookId += 1
-    books.push(book)
-
-    return res.status(201).json(book)
+    return res.status(201).json(await books.create(inputBook))
   })
 
-  app.patch('/api/books/:id', (req, res) => {
+  app.patch('/api/books/:id', async (req, res) => {
     const idText = req.params.id
     const id = Number(idText)
-    if (!/^[1-9]\d*$/.test(idText) || !Number.isSafeInteger(id)) {
+    if (!/^[1-9]\d*$/.test(idText) || !Number.isSafeInteger(id) || id > 2147483647) {
       return res.status(400).json({ error: 'Book ID must be a positive integer' })
     }
-    const index = books.findIndex((book) => book.id === id)
-    if (index === -1) {
+    const current = await books.findById(id)
+    if (!current) {
       return res.status(404).json({ error: 'Book not found' })
     }
 
@@ -108,7 +105,6 @@ export function createApp() {
       return res.status(400).json({ error: 'Update must contain supported fields' })
     }
 
-    const current = books[index]
     const status = Object.hasOwn(input, 'status') ? input.status : current.status
     if (status !== 'unread' && status !== 'read') {
       return res.status(400).json({ error: 'Status must be unread or read' })
@@ -159,23 +155,24 @@ export function createApp() {
       } : {}),
       status,
     }
-    books[index] = updatedBook
-    return res.json(updatedBook)
+    const savedBook = await books.update(id, updatedBook)
+    if (!savedBook) {
+      return res.status(404).json({ error: 'Book not found' })
+    }
+    return res.json(savedBook)
   })
 
-  app.delete('/api/books/:id', (req, res) => {
+  app.delete('/api/books/:id', async (req, res) => {
     const idText = req.params.id
     const id = Number(idText)
-    if (!/^[1-9]\d*$/.test(idText) || !Number.isSafeInteger(id)) {
+    if (!/^[1-9]\d*$/.test(idText) || !Number.isSafeInteger(id) || id > 2147483647) {
       return res.status(400).json({ error: 'Book ID must be a positive integer' })
     }
 
-    const index = books.findIndex((book) => book.id === id)
-    if (index === -1) {
+    if (!await books.remove(id)) {
       return res.status(404).json({ error: 'Book not found' })
     }
 
-    books.splice(index, 1)
     return res.status(204).send()
   })
 
@@ -183,7 +180,9 @@ export function createApp() {
     if (error.type === 'entity.parse.failed') {
       return res.status(400).json({ error: 'Malformed JSON' })
     }
-    return next(error)
+    if (res.headersSent) return next(error)
+    console.error('Book API request failed', error)
+    return res.status(500).json({ error: 'Internal server error' })
   })
 
   return app

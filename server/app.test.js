@@ -1,13 +1,20 @@
 // @vitest-environment node
 import { once } from 'node:events'
-import { afterEach, beforeEach, expect, test } from 'vitest'
+import pg from 'pg'
+import { afterAll, afterEach, beforeEach, expect, test } from 'vitest'
 import { createApp } from './app.js'
 
+const { Pool } = pg
+if (!process.env.TEST_DATABASE_URL?.endsWith('/book_insight_test')) {
+  throw new Error('TEST_DATABASE_URL must point to book_insight_test')
+}
+const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL })
 let server
 let baseUrl
 
 beforeEach(async () => {
-  server = createApp().listen(0, '127.0.0.1')
+  await pool.query('TRUNCATE books RESTART IDENTITY')
+  server = createApp(pool).listen(0, '127.0.0.1')
   await once(server, 'listening')
   baseUrl = `http://127.0.0.1:${server.address().port}`
 })
@@ -18,6 +25,10 @@ afterEach(async () => {
       server.close((error) => error ? reject(error) : resolve())
     })
   }
+})
+
+afterAll(async () => {
+  await pool.end()
 })
 
 async function postBook(body) {
@@ -331,4 +342,42 @@ test('壊れたJSONなら400とJSONのエラーを返す', async () => {
 
   expect(response.status).toBe(400)
   expect(await response.json()).toEqual({ error: 'Malformed JSON' })
+})
+
+test('book records survive an API server restart', async () => {
+  const created = await (await postBook({
+    title: 'Persistent book', author: 'Author', status: 'read', rating: 4,
+    readDate: { precision: 'year', value: '2020' }, memo: 'Note',
+  })).json()
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+  })
+  server = createApp(pool).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  baseUrl = `http://127.0.0.1:${server.address().port}`
+
+  const response = await fetch(`${baseUrl}/api/books`)
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual([created])
+})
+
+test('year-only read dates keep four digits after a database round trip', async () => {
+  const readDate = { precision: 'year', value: '0001' }
+  const response = await postBook({ title: 'Old book', author: 'Author', status: 'read', readDate })
+
+  expect(response.status).toBe(201)
+  expect((await response.json()).readDate).toEqual(readDate)
+  const books = await (await fetch(`${baseUrl}/api/books`)).json()
+  expect(books[0].readDate).toEqual(readDate)
+})
+
+test.each([
+  { precision: 'year', value: '0000' },
+  { precision: 'day', value: '0000-01-01' },
+])('read dates outside the database range are rejected: %j', async (readDate) => {
+  const response = await postBook({ title: 'Book', author: 'Author', status: 'read', readDate })
+
+  expect(response.status).toBe(400)
+  expect(await response.json()).toEqual({ error: 'Read date must be a valid day, year, or null' })
 })
