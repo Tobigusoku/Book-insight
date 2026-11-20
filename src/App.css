@@ -124,6 +124,32 @@
   text-align: left;
 }
 
+.book-list-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid #ccc;
+}
+
+.book-list .book-list-filters button {
+  min-width: 0;
+  padding: 0.5rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: inherit;
+}
+
+.book-list .book-list-filters button[aria-pressed="true"] {
+  border-bottom-color: #2b6857;
+  color: #205544;
+  font-weight: 600;
+}
+
+.book-list .book-list-filters button:hover,
+.book-list .book-list-filters button:focus-visible {
+  background: #f3f6f4;
+}
+
 .book-list ul {
   list-style: none;
   padding: 0;

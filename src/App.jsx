@@ -166,11 +166,21 @@ function App() {
   const [editingInfoBookId, setEditingInfoBookId] = useState(null)
   const [editingMemoBookId, setEditingMemoBookId] = useState(null)
   const [books, setBooks] = useState([])
+  const [bookFilter, setBookFilter] = useState('all')
   const [bookStatus, setBookStatus] = useState('loading')
   const [bookError, setBookError] = useState('')
   const [saving, setSaving] = useState(false)
   const [reloadBooks, setReloadBooks] = useState(0)
   const latestSearch = useRef(0)
+  const visibleBooks = books
+    .filter((book) => bookFilter === 'all' || book.status === bookFilter)
+    .sort((a, b) => {
+      if (bookFilter !== 'read') return b.id - a.id
+      const aDate = a.readDate?.value ?? ''
+      const bDate = b.readDate?.value ?? ''
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1
+      return b.id - a.id
+    })
 
   useEffect(() => {
     let active = true
@@ -450,6 +460,11 @@ function App() {
 
       <section className="book-list">
         <h2>登録した本</h2>
+        <div className="book-list-filters" role="group" aria-label="本の表示">
+          <button type="button" aria-pressed={bookFilter === 'all'} onClick={() => setBookFilter('all')}>すべて</button>
+          <button type="button" aria-pressed={bookFilter === 'unread'} onClick={() => setBookFilter('unread')}>積読</button>
+          <button type="button" aria-pressed={bookFilter === 'read'} onClick={() => setBookFilter('read')}>読了</button>
+        </div>
         {bookStatus === 'loading' && <p role="status">記録を読み込み中...</p>}
         {bookStatus === 'error' && (
           <div>
@@ -462,8 +477,9 @@ function App() {
           </div>
         )}
         {bookError && bookStatus !== 'error' && <p role="alert">{bookError}</p>}
+        {bookStatus === 'ready' && visibleBooks.length === 0 && <p>表示する本がありません</p>}
         <ul>
-          {books.map((book) => (
+          {visibleBooks.map((book) => (
             <li key={book.id}>
               <button
                 type="button"

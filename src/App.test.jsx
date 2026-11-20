@@ -29,6 +29,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: `${title}の詳細を開く` }))
   }
 
+  const getBookItem = (title) => screen.getByRole('button', { name: `${title}の詳細を開く` }).closest('li')
+
   beforeEach(() => {
     localStorage.removeItem('book-insight-books')
     apiBooks = []
@@ -73,6 +75,76 @@ describe('App', () => {
     await renderApp()
 
     expect(screen.getByRole('heading', { name: 'Book Insight' })).toBeInTheDocument()
+  })
+
+  test('一覧をすべて・積読・読了で切り替える', async () => {
+    seedBooks([
+      { id: 1, title: '積読の本', author: '著者A', status: 'unread' },
+      { id: 2, title: '読了の本', author: '著者B', status: 'read', rating: 4, readDate: null },
+    ])
+    await renderApp()
+
+    const filters = within(screen.getByRole('group', { name: '本の表示' }))
+    expect(filters.getByRole('button', { name: 'すべて' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+
+    fireEvent.click(filters.getByRole('button', { name: '積読' }))
+    expect(screen.getByText('積読の本 / 著者A')).toBeInTheDocument()
+    expect(screen.queryByText('読了の本 / 著者B')).not.toBeInTheDocument()
+
+    fireEvent.click(filters.getByRole('button', { name: '読了' }))
+    expect(screen.getByText('読了の本 / 著者B')).toBeInTheDocument()
+    expect(screen.queryByText('積読の本 / 著者A')).not.toBeInTheDocument()
+
+    fireEvent.click(filters.getByRole('button', { name: 'すべて' }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(apiBooks).toHaveLength(2)
+  })
+
+  test('選択した表示に本がない場合は空表示にする', async () => {
+    seedBooks([{ id: 1, title: '積読の本', author: '著者A', status: 'unread' }])
+    await renderApp()
+
+    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '読了' }))
+    expect(screen.getByText('表示する本がありません')).toBeInTheDocument()
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+  })
+
+  test('すべてと積読は新しく登録した本から表示する', async () => {
+    seedBooks([
+      { id: 1, title: '古い積読', author: '著者A', status: 'unread' },
+      { id: 2, title: '読了の本', author: '著者B', status: 'read', rating: 3, readDate: null },
+      { id: 3, title: '新しい積読', author: '著者C', status: 'unread' },
+    ])
+    await renderApp()
+
+    const titles = () => screen.getAllByRole('listitem').map((item) => within(item).getByRole('button').getAttribute('aria-label'))
+    expect(titles()).toEqual(['新しい積読の詳細を開く', '読了の本の詳細を開く', '古い積読の詳細を開く'])
+
+    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '積読' }))
+    expect(titles()).toEqual(['新しい積読の詳細を開く', '古い積読の詳細を開く'])
+    expect(apiBooks.map((book) => book.id)).toEqual([1, 2, 3])
+  })
+
+  test('読了は読了時期の新しい順に表示し、不明は最後にする', async () => {
+    seedBooks([
+      { id: 1, title: '時期不明', author: '著者A', status: 'read', rating: 3, readDate: null },
+      { id: 2, title: '2023年', author: '著者B', status: 'read', rating: 3, readDate: { precision: 'year', value: '2023' } },
+      { id: 3, title: '2024年のみ', author: '著者C', status: 'read', rating: 3, readDate: { precision: 'year', value: '2024' } },
+      { id: 4, title: '2024年5月', author: '著者D', status: 'read', rating: 3, readDate: { precision: 'day', value: '2024-05-01' } },
+      { id: 5, title: '2024年8月', author: '著者E', status: 'read', rating: 3, readDate: { precision: 'day', value: '2024-08-01' } },
+    ])
+    await renderApp()
+
+    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '読了' }))
+    expect(screen.getAllByRole('listitem').map((item) => within(item).getByRole('button').getAttribute('aria-label')))
+      .toEqual([
+        '2024年8月の詳細を開く',
+        '2024年5月の詳細を開く',
+        '2024年のみの詳細を開く',
+        '2023年の詳細を開く',
+        '時期不明の詳細を開く',
+      ])
   })
 
   test('入力した本のタイトルを保持する', async () => {
@@ -239,7 +311,7 @@ describe('App', () => {
     vi.setSystemTime(new Date(2024, 5, 1, 12))
     const { unmount } = await renderApp()
 
-    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    fireEvent.click(within(screen.getByRole('group', { name: '登録時の状態' })).getByRole('button', { name: '読了' }))
     const form = screen.getByRole('form', { name: '新しい本の読了記録' })
     const addButton = within(form).getByRole('button', { name: '追加' })
     expect(addButton).toBeDisabled()
@@ -266,7 +338,7 @@ describe('App', () => {
       readDate: { precision: 'day', value: '2024-06-01' },
       memo: '',
     })
-    expect(screen.getByRole('button', { name: '積読' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(screen.getByRole('group', { name: '登録時の状態' })).getByRole('button', { name: '積読' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByRole('form', { name: '新しい本の読了記録' })).not.toBeInTheDocument()
 
     unmount()
@@ -283,7 +355,7 @@ describe('App', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
       target: { value: '夏目漱石' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    fireEvent.click(within(screen.getByRole('group', { name: '登録時の状態' })).getByRole('button', { name: '読了' }))
 
     const form = screen.getByRole('form', { name: '新しい本の読了記録' })
     fireEvent.change(within(form).getByRole('combobox', { name: '評価' }), {
@@ -319,7 +391,7 @@ describe('App', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '著者' }), {
       target: { value: '川端康成' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    fireEvent.click(within(screen.getByRole('group', { name: '登録時の状態' })).getByRole('button', { name: '読了' }))
     const form = screen.getByRole('form', { name: '新しい本の読了記録' })
     fireEvent.change(within(form).getByRole('textbox', { name: '感想・メモ（任意）' }), {
       target: { value: '保存しないメモ' },
@@ -350,7 +422,7 @@ describe('App', () => {
     fireEvent.click(addButton)
     await screen.findByText('こころ / 夏目漱石')
 
-    const firstBook = screen.getAllByRole('listitem')[0]
+    const firstBook = getBookItem('銀河鉄道の夜')
     openBook('銀河鉄道の夜')
     fireEvent.click(within(firstBook).getByRole('button', { name: '削除' }))
 
@@ -396,7 +468,7 @@ describe('App', () => {
     expect(books.map((book) => book.author)).toEqual(['宮沢賢治', '夏目漱石', '太宰治'])
     expect(new Set(books.map((book) => book.id)).size).toBe(3)
 
-    const bookToDelete = screen.getAllByRole('listitem')[1]
+    const bookToDelete = getBookItem('こころ')
     openBook('こころ')
     fireEvent.click(within(bookToDelete).getByRole('button', { name: '削除' }))
 
@@ -421,7 +493,8 @@ describe('App', () => {
       { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
     ])
     await renderApp()
-    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    const firstBook = getBookItem('こころ')
+    const secondBook = getBookItem('雪国')
 
     expect(within(firstBook).getByRole('button', { name: 'こころの詳細を開く' })).toHaveAttribute('aria-expanded', 'false')
     expect(within(firstBook).queryByText('読了 · 5/5')).not.toBeInTheDocument()
@@ -582,7 +655,8 @@ describe('App', () => {
     ])
     await renderApp()
 
-    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    const firstBook = getBookItem('こころ')
+    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了にする' }))
     fireEvent.click(within(firstBook).getByRole('button', { name: '保存' }))
@@ -609,7 +683,8 @@ describe('App', () => {
     ])
     const { unmount } = await renderApp()
 
-    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    const firstBook = getBookItem('こころ')
+    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了記録を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころの読了記録を編集' })
@@ -702,7 +777,8 @@ describe('App', () => {
     ])
     const { unmount } = await renderApp()
 
-    const [firstBook, secondBook] = screen.getAllByRole('listitem')
+    const firstBook = getBookItem('こころ')
+    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: 'タイトル・著者を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころのタイトルと著者を編集' })
@@ -812,7 +888,7 @@ describe('App', () => {
     expect(screen.getByRole('textbox', { name: '著者' })).toHaveValue('宮島未奈')
     expect(screen.queryByRole('button', { name: '成瀬は天下を取りにいくを選択' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '読了' }))
+    fireEvent.click(within(screen.getByRole('group', { name: '登録時の状態' })).getByRole('button', { name: '読了' }))
     fireEvent.click(within(screen.getByRole('form', { name: '新しい本の読了記録' })).getByRole('button', { name: '追加' }))
     await screen.findByText('成瀬は天下を取りにいく / 宮島未奈')
     expect(apiBooks[0]).toMatchObject({
