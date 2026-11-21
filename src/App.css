@@ -112,6 +112,32 @@
   margin: 0.25rem 0 0;
 }
 
+.search-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+}
+
+.search-spinner {
+  box-sizing: border-box;
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  border: 2px solid #bfd2c9;
+  border-top-color: #205544;
+  border-radius: 50%;
+  animation: search-spin 0.8s linear infinite;
+}
+
+@keyframes search-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-spinner { animation: none; }
+}
+
 .search-results button {
   padding: 0.4rem 0.6rem;
   font: inherit;
@@ -126,7 +152,7 @@
 
 .book-list-filters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-bottom: 1px solid #ccc;
 }
 

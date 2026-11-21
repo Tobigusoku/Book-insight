@@ -166,16 +166,16 @@ function App() {
   const [editingInfoBookId, setEditingInfoBookId] = useState(null)
   const [editingMemoBookId, setEditingMemoBookId] = useState(null)
   const [books, setBooks] = useState([])
-  const [bookFilter, setBookFilter] = useState('all')
+  const [bookFilter, setBookFilter] = useState('read')
   const [bookStatus, setBookStatus] = useState('loading')
   const [bookError, setBookError] = useState('')
   const [saving, setSaving] = useState(false)
   const [reloadBooks, setReloadBooks] = useState(0)
   const latestSearch = useRef(0)
   const visibleBooks = books
-    .filter((book) => bookFilter === 'all' || book.status === bookFilter)
+    .filter((book) => book.status === bookFilter)
     .sort((a, b) => {
-      if (bookFilter !== 'read') return b.id - a.id
+      if (bookFilter === 'unread') return b.id - a.id
       const aDate = a.readDate?.value ?? ''
       const bDate = b.readDate?.value ?? ''
       if (aDate !== bDate) return aDate < bDate ? 1 : -1
@@ -287,6 +287,7 @@ function App() {
     setBookError('')
     try {
       const newBook = await createBook(input)
+      setBookFilter(newBook.status)
       setBooks([])
       setBookStatus('loading')
       setExpandedBookId(newBook.id)
@@ -340,6 +341,7 @@ function App() {
     try {
       const updated = await updateBook(id, { ...details, status: 'read' })
       setBooks((current) => current.map((book) => book.id === id ? updated : book))
+      setBookFilter('read')
       setReadingBookId(null)
     } catch {
       setBookError('読了記録を保存できませんでした。もう一度お試しください')
@@ -436,7 +438,12 @@ function App() {
       {searchStatus !== 'idle' && (
         <section className="search-results" aria-label="検索結果">
           <h2>検索結果</h2>
-          {searchStatus === 'loading' && <p role="status">検索中...</p>}
+          {searchStatus === 'loading' && (
+            <p className="search-loading" role="status">
+              <span className="search-spinner" aria-hidden="true" />
+              検索中...
+            </p>
+          )}
           {searchStatus === 'empty' && <p role="status">候補が見つかりませんでした</p>}
           {searchStatus === 'error' && <p role="alert">検索できませんでした。もう一度お試しください</p>}
           {searchStatus === 'success' && (
@@ -461,9 +468,8 @@ function App() {
       <section className="book-list">
         <h2>登録した本</h2>
         <div className="book-list-filters" role="group" aria-label="本の表示">
-          <button type="button" aria-pressed={bookFilter === 'all'} onClick={() => setBookFilter('all')}>すべて</button>
-          <button type="button" aria-pressed={bookFilter === 'unread'} onClick={() => setBookFilter('unread')}>積読</button>
           <button type="button" aria-pressed={bookFilter === 'read'} onClick={() => setBookFilter('read')}>読了</button>
+          <button type="button" aria-pressed={bookFilter === 'unread'} onClick={() => setBookFilter('unread')}>積読</button>
         </div>
         {bookStatus === 'loading' && <p role="status">記録を読み込み中...</p>}
         {bookStatus === 'error' && (

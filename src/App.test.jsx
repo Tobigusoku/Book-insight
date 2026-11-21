@@ -31,6 +31,10 @@ describe('App', () => {
 
   const getBookItem = (title) => screen.getByRole('button', { name: `${title}の詳細を開く` }).closest('li')
 
+  const showBooks = (status) => {
+    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: status }))
+  }
+
   beforeEach(() => {
     localStorage.removeItem('book-insight-books')
     apiBooks = []
@@ -77,7 +81,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Book Insight' })).toBeInTheDocument()
   })
 
-  test('一覧をすべて・積読・読了で切り替える', async () => {
+  test('一覧は読了を初期表示し、積読との間で切り替える', async () => {
     seedBooks([
       { id: 1, title: '積読の本', author: '著者A', status: 'unread' },
       { id: 2, title: '読了の本', author: '著者B', status: 'read', rating: 4, readDate: null },
@@ -85,10 +89,14 @@ describe('App', () => {
     await renderApp()
 
     const filters = within(screen.getByRole('group', { name: '本の表示' }))
-    expect(filters.getByRole('button', { name: 'すべて' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(filters.getAllByRole('button').map((button) => button.textContent)).toEqual(['読了', '積読'])
+    expect(filters.queryByRole('button', { name: 'すべて' })).not.toBeInTheDocument()
+    expect(filters.getByRole('button', { name: '読了' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('読了の本 / 著者B')).toBeInTheDocument()
+    expect(screen.queryByText('積読の本 / 著者A')).not.toBeInTheDocument()
 
     fireEvent.click(filters.getByRole('button', { name: '積読' }))
+    expect(filters.getByRole('button', { name: '積読' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('積読の本 / 著者A')).toBeInTheDocument()
     expect(screen.queryByText('読了の本 / 著者B')).not.toBeInTheDocument()
 
@@ -96,8 +104,6 @@ describe('App', () => {
     expect(screen.getByText('読了の本 / 著者B')).toBeInTheDocument()
     expect(screen.queryByText('積読の本 / 著者A')).not.toBeInTheDocument()
 
-    fireEvent.click(filters.getByRole('button', { name: 'すべて' }))
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
     expect(apiBooks).toHaveLength(2)
   })
 
@@ -105,12 +111,13 @@ describe('App', () => {
     seedBooks([{ id: 1, title: '積読の本', author: '著者A', status: 'unread' }])
     await renderApp()
 
-    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '読了' }))
     expect(screen.getByText('表示する本がありません')).toBeInTheDocument()
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+    showBooks('積読')
+    expect(screen.getByText('積読の本 / 著者A')).toBeInTheDocument()
   })
 
-  test('すべてと積読は新しく登録した本から表示する', async () => {
+  test('積読は新しく登録した本から表示する', async () => {
     seedBooks([
       { id: 1, title: '古い積読', author: '著者A', status: 'unread' },
       { id: 2, title: '読了の本', author: '著者B', status: 'read', rating: 3, readDate: null },
@@ -118,11 +125,9 @@ describe('App', () => {
     ])
     await renderApp()
 
-    const titles = () => screen.getAllByRole('listitem').map((item) => within(item).getByRole('button').getAttribute('aria-label'))
-    expect(titles()).toEqual(['新しい積読の詳細を開く', '読了の本の詳細を開く', '古い積読の詳細を開く'])
-
-    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '積読' }))
-    expect(titles()).toEqual(['新しい積読の詳細を開く', '古い積読の詳細を開く'])
+    showBooks('積読')
+    expect(screen.getAllByRole('listitem').map((item) => within(item).getByRole('button').getAttribute('aria-label')))
+      .toEqual(['新しい積読の詳細を開く', '古い積読の詳細を開く'])
     expect(apiBooks.map((book) => book.id)).toEqual([1, 2, 3])
   })
 
@@ -136,7 +141,6 @@ describe('App', () => {
     ])
     await renderApp()
 
-    fireEvent.click(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '読了' }))
     expect(screen.getAllByRole('listitem').map((item) => within(item).getByRole('button').getAttribute('aria-label')))
       .toEqual([
         '2024年8月の詳細を開く',
@@ -166,6 +170,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '追加' }))
 
     const bookItem = await screen.findByRole('listitem')
+    expect(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '積読' }))
+      .toHaveAttribute('aria-pressed', 'true')
     expect(bookItem).toHaveTextContent('銀河鉄道の夜 / 宮沢賢治')
     expect(within(bookItem).getByText('積読')).toBeInTheDocument()
     expect(apiBooks[0]).toMatchObject({
@@ -184,6 +190,7 @@ describe('App', () => {
   test('APIサーバー再起動後の追加で古い本とIDが重なっても一覧を同期する', async () => {
     seedBooks([{ id: 1, title: '古い本', author: '著者A', status: 'unread', memo: '' }])
     const { unmount } = await renderApp()
+    showBooks('積読')
     openBook('古い本')
 
     seedBooks([])
@@ -198,6 +205,7 @@ describe('App', () => {
 
     unmount()
     await renderApp()
+    showBooks('積読')
     expect(screen.getByText('新しい本 / 著者B')).toBeInTheDocument()
   })
 
@@ -234,6 +242,7 @@ describe('App', () => {
   test('積読のメモを編集し、読了にした後も引き継ぐ', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '最初のメモ' }])
     await renderApp()
+    showBooks('積読')
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
     const memoForm = screen.getByRole('form', { name: '雪国のメモを編集' })
@@ -258,6 +267,7 @@ describe('App', () => {
   test('積読のメモ編集をキャンセルしても保存済みのメモは変わらない', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '元のメモ' }])
     await renderApp()
+    showBooks('積読')
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
     const form = screen.getByRole('form', { name: '雪国のメモを編集' })
@@ -271,6 +281,7 @@ describe('App', () => {
   test('積読のメモ保存に失敗したら編集内容を残して再試行できる', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread', memo: '元のメモ' }])
     await renderApp()
+    showBooks('積読')
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: 'メモを編集' }))
     const form = screen.getByRole('form', { name: '雪国のメモを編集' })
@@ -450,6 +461,7 @@ describe('App', () => {
 
     unmount()
     await renderApp()
+    showBooks('積読')
     expect(screen.getByText('銀河鉄道の夜 / 宮沢賢治')).toBeInTheDocument()
     expect(screen.getByText('こころ / 夏目漱石')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '削除' })).not.toBeInTheDocument()
@@ -494,28 +506,31 @@ describe('App', () => {
     ])
     await renderApp()
     const firstBook = getBookItem('こころ')
-    const secondBook = getBookItem('雪国')
 
     expect(within(firstBook).getByRole('button', { name: 'こころの詳細を開く' })).toHaveAttribute('aria-expanded', 'false')
     expect(within(firstBook).queryByText('読了 · 5/5')).not.toBeInTheDocument()
     expect(within(firstBook).queryByText('読後の感想')).not.toBeInTheDocument()
-    expect(within(secondBook).queryByText('積読')).not.toBeInTheDocument()
 
     openBook('こころ')
     expect(within(firstBook).getByRole('button', { name: 'こころの詳細を閉じる' })).toHaveAttribute('aria-expanded', 'true')
     expect(within(firstBook).getByText('読了 · 5/5')).toBeInTheDocument()
     expect(within(firstBook).getByText('読後の感想')).toBeInTheDocument()
 
+    showBooks('積読')
+    const secondBook = getBookItem('雪国')
+    expect(within(secondBook).queryByText('積読')).not.toBeInTheDocument()
     openBook('雪国')
-    expect(within(firstBook).queryByText('読後の感想')).not.toBeInTheDocument()
     expect(within(secondBook).getByText('積読')).toBeInTheDocument()
     fireEvent.click(within(secondBook).getByRole('button', { name: '雪国の詳細を閉じる' }))
     expect(within(secondBook).queryByText('積読')).not.toBeInTheDocument()
+    showBooks('読了')
+    expect(screen.getByRole('button', { name: 'こころの詳細を開く' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   test('詳細を閉じると未保存の編集フォームは破棄される', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', status: 'unread' }])
     await renderApp()
+    showBooks('積読')
 
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
@@ -573,6 +588,7 @@ describe('App', () => {
       { id: 1, title: 'こころ', author: '夏目漱石', status: 'unread' },
     ])
     await renderApp()
+    showBooks('積読')
 
     const bookItem = screen.getByRole('listitem')
     openBook('こころ')
@@ -608,6 +624,7 @@ describe('App', () => {
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
     ])
     await renderApp()
+    showBooks('積読')
 
     const bookItem = screen.getByRole('listitem')
     openBook('雪国')
@@ -634,6 +651,7 @@ describe('App', () => {
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
     ])
     await renderApp()
+    showBooks('積読')
 
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
@@ -654,14 +672,18 @@ describe('App', () => {
       { id: 2, title: '雪国', author: '川端康成', status: 'unread' },
     ])
     await renderApp()
+    showBooks('積読')
 
     const firstBook = getBookItem('こころ')
-    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了にする' }))
     fireEvent.click(within(firstBook).getByRole('button', { name: '保存' }))
 
     expect(await within(firstBook).findByText('読了 · 3/5')).toBeInTheDocument()
+    expect(within(screen.getByRole('group', { name: '本の表示' })).getByRole('button', { name: '読了' }))
+      .toHaveAttribute('aria-pressed', 'true')
+    showBooks('積読')
+    const secondBook = getBookItem('雪国')
     openBook('雪国')
     expect(within(secondBook).getByText('積読')).toBeInTheDocument()
     expect(apiBooks.map((book) => book.status))
@@ -684,7 +706,6 @@ describe('App', () => {
     const { unmount } = await renderApp()
 
     const firstBook = getBookItem('こころ')
-    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: '読了記録を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころの読了記録を編集' })
@@ -710,6 +731,8 @@ describe('App', () => {
     expect(await within(firstBook).findByText('読了 · 2/5')).toBeInTheDocument()
     expect(within(firstBook).getByText('2023-04-05')).toBeInTheDocument()
     expect(within(firstBook).getByText('新しい感想')).toBeInTheDocument()
+    showBooks('積読')
+    const secondBook = getBookItem('雪国')
     openBook('雪国')
     expect(within(secondBook).getByText('積読')).toBeInTheDocument()
     expect(apiBooks[0]).toMatchObject({
@@ -778,7 +801,6 @@ describe('App', () => {
     const { unmount } = await renderApp()
 
     const firstBook = getBookItem('こころ')
-    const secondBook = getBookItem('雪国')
     openBook('こころ')
     fireEvent.click(within(firstBook).getByRole('button', { name: 'タイトル・著者を編集' }))
     const form = within(firstBook).getByRole('form', { name: 'こころのタイトルと著者を編集' })
@@ -795,6 +817,8 @@ describe('App', () => {
     expect(await within(firstBook).findByText('こころ 改訂版 / 夏目 漱石')).toBeInTheDocument()
     expect(within(firstBook).getByText('読了 · 5/5')).toBeInTheDocument()
     expect(within(firstBook).getByText('印象に残った')).toBeInTheDocument()
+    showBooks('積読')
+    const secondBook = getBookItem('雪国')
     expect(within(secondBook).getByText('雪国 / 川端康成')).toBeInTheDocument()
     expect(apiBooks[0]).toMatchObject({
       title: 'こころ 改訂版',
@@ -815,6 +839,7 @@ describe('App', () => {
       { id: 1, title: '雪国', author: '川端康成', status: 'unread' },
     ])
     await renderApp()
+    showBooks('積読')
 
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: 'タイトル・著者を編集' }))
@@ -970,6 +995,7 @@ describe('App', () => {
 
     unmount()
     await renderApp()
+    showBooks('積読')
     const restoredImage = within(screen.getByRole('listitem')).getByRole('img', { name: '雪国の書影' })
     expect(restoredImage).toHaveAttribute('src', coverUrl)
     fireEvent.error(restoredImage)
@@ -1001,6 +1027,24 @@ describe('App', () => {
     await screen.findByRole('listitem')
     expect(apiBooks[0].coverUrl).toBeNull()
     expect(within(screen.getByRole('listitem')).getByText('書影なし')).toBeInTheDocument()
+  })
+
+  test('検索中はスピナーと状態を表示し、結果が届いたら消す', async () => {
+    let resolveSearch
+    searchFetch.mockImplementation(() => new Promise((resolve) => { resolveSearch = resolve }))
+    await renderApp()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '本のタイトル' }), { target: { value: '雪国' } })
+    fireEvent.click(screen.getByRole('button', { name: '検索' }))
+
+    const loading = screen.getByRole('status')
+    expect(loading).toHaveTextContent('検索中...')
+    expect(loading.querySelector('.search-spinner')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('button', { name: '検索' })).toBeDisabled()
+
+    resolveSearch({ ok: true, text: async () => '<rss><channel><item><title>雪国</title><guid>book-1</guid></item></channel></rss>' })
+    expect(await screen.findByRole('button', { name: '雪国を選択' })).toBeInTheDocument()
+    expect(screen.queryByText('検索中...')).not.toBeInTheDocument()
   })
 
   test('雪国を検索したら無関係な題名を除き、完全一致を先に表示する', async () => {
@@ -1095,6 +1139,7 @@ describe('App', () => {
   test('更新に失敗したら元の本と編集フォームを保つ', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', coverUrl: null, status: 'unread' }])
     await renderApp()
+    showBooks('積読')
     openBook('雪国')
     fireEvent.click(screen.getByRole('button', { name: '読了にする' }))
     failingMethod = 'PATCH'
@@ -1112,6 +1157,7 @@ describe('App', () => {
   test('削除に失敗したら本を残し、再試行で削除する', async () => {
     seedBooks([{ id: 1, title: '雪国', author: '川端康成', coverUrl: null, status: 'unread' }])
     await renderApp()
+    showBooks('積読')
     openBook('雪国')
     failingMethod = 'DELETE'
 
